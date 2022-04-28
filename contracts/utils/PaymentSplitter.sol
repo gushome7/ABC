@@ -23,6 +23,7 @@ import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/utils/Context.s
  * NOTE: This contract assumes that ERC20 tokens will behave similarly to native tokens (Ether). Rebasing tokens, and
  * tokens that apply fees during transfers, are likely to not be supported as expected. If in doubt, we encourage you
  * to run tests before sending real value to this contract.
+ * GHB: traido localmente para resolver problemas de compilacion
  */
 contract PaymentSplitter is Context {
     event PayeeAdded(address account, uint256 shares);
