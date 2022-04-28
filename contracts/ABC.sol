@@ -59,7 +59,7 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
   uint16 constant beltersDayStartingYear=2022;
   uint256 constant beltersDayStartingAmount=4000;
   uint256 constant beltersDayFactor=2;
-  address public abcVault;
+  address payable public abcVault;
   address public abcPayment;
 
 
@@ -68,7 +68,7 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
 
   constructor( string memory _initBaseURI) ERC721(_name, _symbol) {
   
-    abcVault = address(new ABCVault());
+    abcVault = payable(new ABCVault(_msgSender()));
     address[] memory _payees=new address[](2);
     uint256[] memory _shares=new uint256[](2);
     _payees[0]=abcVault;
@@ -119,7 +119,9 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
 
   /* @dev: Recibe pagos kickstart y emite NFT de cortesia
    * De acuerdo al whitepaper, hasta alcanzar kickStartTarget se aceptan pagos llamando a esta funcion, con un minimo de
-   * kickStartMin. La funcion registra el sender y le asigna el pago efectuado. Ademas, emite un token de cortesia
+   * kickStartMin. La funcion registra el sender y le asigna el pago efectuado.
+   * 
+   * TODO: Remover emision de cortesia.
    * TODO: Emitir evento pago recibido.
    */
   function kickstart() public payable {
@@ -134,8 +136,8 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
     kickStartCollected=kickStartCollected+msg.value;
 
     totalSales=totalSales + msg.value;
-    uint tokenId=Random.generate(2,maxSupply); 
-    _safeMint(_msgSender(),tokenId);    
+    //uint tokenId=Random.generate(2,maxSupply); 
+    //_safeMint(_msgSender(),tokenId);    
   }
 
   /* @dev: Mintea el token especificado en tokenId, o selecciona uno en forma random
@@ -264,6 +266,11 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
       //require(Address(abcVault).send(address(this).balance));
     }
 
+    function transferABCVaultOwnership(address _newOwner) public onlyOwner {
+      ABCVault _vault = ABCVault(abcVault);
+      _vault.transferOwnership(_newOwner);
+    }
+
     // internal
     function _baseURI() internal view virtual override returns (string memory) {
       return baseURI;
@@ -319,9 +326,10 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
 
 
 contract ABCVault is IERC721Receiver, Ownable {
+  address public abcStarter;  
 
-  constructor() {
-
+  constructor(address _abcStarter) {
+    abcStarter = _abcStarter;
   }
 
   /* @dev: Vault debe poder recibir los pagos que envie splitter
@@ -333,6 +341,13 @@ contract ABCVault is IERC721Receiver, Ownable {
   
   function onERC721Received(address, address, uint256, bytes memory) public virtual override returns (bytes4) {
     return this.onERC721Received.selector;
+  }
+
+  function withdraw(address payable _to, uint256 _amount) public payable onlyOwner {
+    require(_amount > address(this).balance, "Not enough funds to transfer that amount");
+    
+    (bool os, ) = _to.call{value: _amount}("");
+    require(os);
   }
 
 }
