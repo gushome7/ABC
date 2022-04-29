@@ -80,9 +80,10 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
     _assignBeltersDay(); //Belters Day Assignment.
     mint(abcVault,1); //Ceres will remain in ABC property forever. Minted and self transfered
     //Mint 20 random asteroids to start secondary market at marketplaces and transfer to owner()
-    uint tokenId=Random.generate(2,maxSupply); 
-    for(uint256 i = tokenId; i < tokenId+20; i++) {
-      mint(owner(), i);
+    uint tokenId=0; 
+    for(uint256 i = 0; i < 20; i++) {
+      tokenId=Random.generate(2,maxSupply,tokenId);
+      mint(owner(), tokenId);
     }
   }
 
@@ -164,7 +165,7 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
       cost = costSelected;
     }
     else {
-      tokenId=_getRandomTokenId();    
+      tokenId=_getRandomTokenId(0);    
     }
     if(_msgSender() != owner()) {
         if(msg.value==0 && kickStarters[_msgSender()]>=cost) {
@@ -207,7 +208,7 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
       require(currentBeltersDay >0,"Claim cannot be processed right now. Wait for the next Belters Day");
       require(!belters[_msgSender()], "Only one NFT could be claimed thru belters day free claim");
 
-      uint256 tokenId=_getRandomTokenId();
+      uint256 tokenId=_getRandomTokenId(0);
       require(!_exists(tokenId), string(abi.encodePacked("Token already minted ", Strings.toString(tokenId))));
       _safeMint(_msgSender(),tokenId);
       beltersDayAssigned[currentBeltersDay]--;
@@ -276,9 +277,9 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
       return baseURI;
     }
 
-    function _getRandomTokenId() private view returns (uint256) {
+    function _getRandomTokenId(uint256 _seed) private view returns (uint256) {
       uint8 direction=1;
-      uint256 tokenId=Random.generate(2,maxToSale);
+      uint256 tokenId=Random.generate(2,maxToSale,_seed);
       while(_exists(tokenId)) {
         if(tokenId == maxSupply) {
           direction=0;          
@@ -330,6 +331,7 @@ contract ABCVault is IERC721Receiver, Ownable {
 
   constructor(address _abcStarter) {
     abcStarter = _abcStarter;
+    
   }
 
   /* @dev: Vault debe poder recibir los pagos que envie splitter
@@ -358,3 +360,9 @@ contract ABCPayments is  PaymentSplitter {
 
   }
 }
+
+/*
+contract ABCGeoAgreement is IERC721Receiver, Ownable {
+
+}
+*/

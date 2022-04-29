@@ -14,7 +14,7 @@ pragma solidity >= 0.8.0 <0.9.0;
 
 library Random { 
 
-    function generate(uint256 _minRange, uint _maxRange) public view returns(uint256) {
+    function generate(uint256 _minRange, uint256 _maxRange, uint256 _seed) public view returns(uint256) {
         require(_maxRange >0, 'Value must be greather than zero');
         require(_maxRange > _minRange, 'Max value must be greather than min value');
         uint256 seed = uint256(keccak256(abi.encodePacked(
@@ -23,7 +23,7 @@ library Random {
             block.gaslimit+
             ((uint256(keccak256(abi.encodePacked(msg.sender))) / (block.timestamp)) +
             block.number
-        ))));
+        )+_seed)));
         uint256 generated = seed - ((seed / _maxRange) * _maxRange);
         if(generated < _minRange) {
             generated = generated + _minRange;
