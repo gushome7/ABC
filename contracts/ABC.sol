@@ -18,37 +18,32 @@ import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/token/common/ER
 import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/access/Ownable.sol";
 import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/token/ERC721/IERC721Receiver.sol";
 
-
+import "./Agreements.sol";
+import "./Kickstarter.sol";
 import "./utils/Random.sol";
 import "./utils/Datetime.sol";
 import "./utils/PaymentSplitter.sol";
 
-contract ABC is ERC2981, ERC721Enumerable, Ownable {
+contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
   using Strings for uint256;
 
   /* ABC Collection parameters and stored data */    
   string public baseURI; 
-  string constant baseExtension = ".json";
-  string constant _name='Asteroid Belt Club';
-  string constant _symbol='ABC';
+  string public constant baseExtension = ".json";
+  string public constant _name='Asteroid Belt Club';
+  string public constant _symbol='ABC';
+  
   uint256 public costRandom = 0.05 ether;
   uint256 public costSelected = 1 ether;
   uint256 public maxSupply = 605011;
   uint256 public maxToSale = 550000;
-  uint256 public totalSales = 0;
-  uint256 public geoPoliticalGenerated = 0;
-  bool private geoPolitical =false;
+  uint256 public totalSales = 0; //
+  uint256 public constant maxMinting=200; //Cantidad maxima de tokens a mintear en una llamada a mint()
   bool public paused = false;
 
-
-  /* Kickstart parameters and stored data */
-  uint256[] private kickStartTarget = [50 ether,100 ether,200 ether,500 ether];
-  uint256[] private kickStartBoost=[800,400,300,200];  
-  uint256 constant kickStartMin = 0.05 ether;
-  mapping(address => uint256) public kickStarters; //Balances for kickstarters
-  uint256 public kickStartCollected=0; //Collected thru kikStart Campaign
-  uint256 public kickStartSpent=0; //Cost of Tokens minted using kickStart funds. (MAX: 1500)
-
+  /* ABC Starter Minting Privileges passed to kickstarter*/
+  uint256 public constant ownerCanMintMax=499 ether; //500 ether - 1 ether for 20 random minted on constructor
+  
   /* Belters Day parameters and stored*/
   uint256 public beltersDayRemaining=10000;
   mapping(uint256 => uint256) public beltersDayAssigned;
@@ -63,11 +58,7 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
   address public abcPayment;
 
 
- 
-  
-
-  constructor( string memory _initBaseURI) ERC721(_name, _symbol) {
-  
+  constructor( string memory _initBaseURI) ERC721(_name, _symbol) Kickstarter(ownerCanMintMax) {
     abcVault = payable(new ABCVault(_msgSender()));
     address[] memory _payees=new address[](2);
     uint256[] memory _shares=new uint256[](2);
@@ -78,13 +69,9 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
     abcPayment = address(new ABCPayments(_payees,_shares));
     setBaseURI(_initBaseURI);  
     _assignBeltersDay(); //Belters Day Assignment.
-    mint(abcVault,1); //Ceres will remain in ABC property forever. Minted and self transfered
+    mint(abcVault,1,1); //Ceres will remain in ABC property forever. Minted and self transfered
     //Mint 20 random asteroids to start secondary market at marketplaces and transfer to owner()
-    uint tokenId=0; 
-    for(uint256 i = 0; i < 20; i++) {
-      tokenId=Random.generate(2,maxSupply,tokenId);
-      mint(owner(), tokenId);
-    }
+    mint(owner(), 0, 20);
   }
 
 
@@ -100,46 +87,14 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
   }
 
 
-  /* @dev: Determina el Boost que se le aplicaran a los pagos kickstart de acuerdo al colectado
-   * Informa el boost actual y la cantidad maxima permitida en un pago kickstart para obtener el beneficio
-   */
-
-  function kickStartReward() public view returns (uint256[] memory) {
-    uint256[] memory boost = new uint256[](2);
-    
-    for(uint i=0;i<kickStartTarget.length;i++) {
-      if(kickStartCollected < kickStartTarget[i]) {
-          boost[0]=(kickStartBoost[i]/100);
-          boost[1]=kickStartTarget[i]-kickStartCollected;
-          break;
-      }
-    }
-    return(boost);
-  }
-
 
   /* @dev: Recibe pagos kickstart y emite NFT de cortesia
    * De acuerdo al whitepaper, hasta alcanzar kickStartTarget se aceptan pagos llamando a esta funcion, con un minimo de
    * kickStartMin. La funcion registra el sender y le asigna el pago efectuado.
    * 
-   * TODO: Remover emision de cortesia.
    * TODO: Emitir evento pago recibido.
    */
-  function kickstart() public payable {
-    require(!paused, "Minting paused. Try again later");
-    uint256[] memory boost= kickStartReward();
-    
-    require(boost[0] > 0, 'KickStart ended. Thanks!');
-    require(boost[1] >=msg.value, string(abi.encodePacked('Please send no more than ', boost[1].toString())));
-    require(msg.value >= kickStartMin, string(abi.encodePacked('Must send at least ', kickStartMin.toString())));
 
-    kickStarters[_msgSender()]=kickStarters[_msgSender()]+(msg.value*boost[0]);
-    kickStartCollected=kickStartCollected+msg.value;
-
-    totalSales=totalSales + msg.value;
-    //uint tokenId=Random.generate(2,maxSupply); 
-    //_safeMint(_msgSender(),tokenId);    
-  }
 
   /* @dev: Mintea el token especificado en tokenId, o selecciona uno en forma random
   * La coleccion no tendra mas que maxSupply elementos. maxSupply es la cantidad de asteroides numerados por el IAU
@@ -153,33 +108,45 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
   * TODO: whitelist discount
   * TODO: Emit mint event.
   */
-  function mint(address _to, uint256 tokenId) public payable {
+  function mint(address _to, uint256 tokenId, uint256 _toMint) public payable {
     uint256 supply = totalSupply();
     uint256 cost = costRandom;
     require(!paused, "Minting paused. Try again later");
-    require(supply < maxSupply, "Currently no NFT left to mint");
-    require(supply - geoPoliticalGenerated < maxToSale, "Currently no NFT left to mint");
-    
+    require(_toMint <= maxMinting,string(abi.encodePacked("Please mint no more that ",maxMinting.toString()," per call")));
+    require(supply+_toMint < maxSupply, "Currently no NFT left to mint");
+    require((supply+_toMint - agreementMinted) < maxToSale, "Currently no NFT left to mint");
+    if(_toMint==0) {
+      _toMint=1;
+    }
+
     if(tokenId >0) {
+      require(_toMint==1, "If specify tokenId you can mint only one NFT");
       require(!_exists(tokenId), "Token already minted ");
       cost = costSelected;
+      _toMint=1;
+    }
+    cost=cost*_toMint;
+    
+    if(msg.value==0 && getKickStartBalance(_msgSender()) >= cost) {
+      updateKickStartBalance(cost,_toMint);
+    }
+    else if(msg.value==0 && getAgreementBalance(_msgSender())>=cost) {
+      updateAgreementBalance(cost,_toMint);
     }
     else {
-      tokenId=_getRandomTokenId(0);    
+      require(msg.value == cost,string(abi.encodePacked("To do this mint you must send ", cost.toString())));
     }
-    if(_msgSender() != owner()) {
-        if(msg.value==0 && kickStarters[_msgSender()]>=cost) {
-          kickStarters[_msgSender()]=kickStarters[_msgSender()]-cost;
-          kickStartSpent=kickStartSpent+cost;
-        }
-        else {
-          require(msg.value == cost,string(abi.encodePacked('To do this mint you must send ', cost.toString())));
-        }
-    }
-    totalSales=totalSales+msg.value;
-    require(!_exists(tokenId), "Token already minted ");
-    _safeMint(_to,tokenId);
     
+    totalSales=totalSales+msg.value;
+    if(tokenId==0) {
+      for(uint256 i=0; i<_toMint; i++) {
+        tokenId=Random.generate(2,maxSupply,tokenId);
+        _safeMint(_to,tokenId);
+      }
+    }
+    else {
+      _safeMint(_to,tokenId);
+    }   
   }
 
     /* @dev: Claim a BeltersDay free token to mint.
@@ -251,15 +218,10 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
     function pause(bool _state) public onlyOwner {
       paused = _state;
     }
-
-
-    function toggleGeopolitical(bool _state) public onlyOwner {
-      geoPolitical = _state;
-    }  
-
-    function withdraw() public payable onlyOwner {
+ 
+    function withdraw() public {
       address payable _to=payable(abcPayment);
-      uint256 minAmount=10000000000000000;
+      uint256 minAmount=100000000000000;
       uint256 available=address(this).balance-minAmount;
       require(available >0,"Insuficient funds");
       _to.transfer(available);
@@ -278,21 +240,9 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
     }
 
     function _getRandomTokenId(uint256 _seed) private view returns (uint256) {
-      uint8 direction=1;
       uint256 tokenId=Random.generate(2,maxToSale,_seed);
       while(_exists(tokenId)) {
-        if(tokenId == maxSupply) {
-          direction=0;          
-        }
-        else if(tokenId ==2) {
-          direction=1;
-        }
-        if(direction==1) {
-          tokenId++;
-        }
-        else {
-          tokenId--;
-        }        
+        tokenId=Random.generate(2,maxToSale,tokenId);
       } 
       return tokenId;
     }
@@ -310,7 +260,7 @@ contract ABC is ERC2981, ERC721Enumerable, Ownable {
     uint toAssign=beltersDayStartingAmount;
     uint16 year=beltersDayStartingYear;
     uint bd;
-    for(uint16 i; i<20;i++) {
+    for(uint8 i; i<20;i++) {
       bd=DateTime.toTimestamp(year,beltersDayMonth,beltersDayDay);
       beltersDay.push(bd);
       beltersDayAssigned[bd]=toAssign+100;
@@ -359,6 +309,7 @@ contract ABCPayments is  PaymentSplitter {
   constructor(address[] memory _payees, uint256[] memory _shares) PaymentSplitter(_payees,_shares) {
 
   }
+
 }
 
 /*
