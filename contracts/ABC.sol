@@ -59,7 +59,7 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
 
 
   constructor( string memory _initBaseURI) ERC721(_name, _symbol) Kickstarter(ownerCanMintMax) {
-    abcVault = payable(new ABCVault(_msgSender()));
+    abcVault = payable(new ABCVault());
     address[] memory _payees=new address[](2);
     uint256[] memory _shares=new uint256[](2);
     _payees[0]=abcVault;
@@ -111,6 +111,7 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
   function mint(address _to, uint256 tokenId, uint256 _toMint) public payable {
     uint256 supply = totalSupply();
     uint256 cost = costRandom;
+    bool agreement=false;
     require(!paused, "Minting paused. Try again later");
     require(_toMint <= maxMinting,string(abi.encodePacked("Please mint no more that ",maxMinting.toString()," per call")));
     require(supply+_toMint < maxSupply, "Currently no NFT left to mint");
@@ -132,6 +133,7 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
     }
     else if(msg.value==0 && getAgreementBalance(_msgSender())>=cost) {
       updateAgreementBalance(cost,_toMint);
+      agreement=true;
     }
     else {
       require(msg.value == cost,string(abi.encodePacked("To do this mint you must send ", cost.toString())));
@@ -141,11 +143,17 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
     if(tokenId==0) {
       for(uint256 i=0; i<_toMint; i++) {
         tokenId=Random.generate(2,maxSupply,tokenId);
+        if(agreement) {
+          updateTokensMinted(tokenId);
+        }
         _safeMint(_to,tokenId);
       }
     }
     else {
-      _safeMint(_to,tokenId);
+      if(agreement) {
+        updateTokensMinted(tokenId);
+      }
+      _safeMint(_to,tokenId);      
     }   
   }
 
@@ -202,6 +210,32 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
           : "";
     }
 
+    function hasDaoRights(uint256 tokenId) public view returns(bool) {
+      require(_exists(tokenId), "Token not minted");
+      if(agreementTokens[tokenId] != address(0)) {
+        return(false);
+      }
+      else {
+        return(true);
+      }
+    }
+
+  /* @dev: Transfiere fondos hacia el Payment Splitter
+   * La funcion permanece publica para que cualquiera pueda iniciar las transferencias, lo que evita que los fondos permanezcan 
+   * rehenes en el contrato, en caso de existir discrepancias entre los beneficiarios finales de los fondos.
+   * En virtud que PaymentSplitter es invariable luego del lanzamiento del contrato, y que los fondos no pueden ser enviados a ninguna
+   * otra dirección, es seguro que la funcion quede publica.
+   * 
+   */
+
+    function withdraw() public {
+      address payable __to=payable(abcPayment);      
+      uint256 __available=address(this).balance;
+      require(__available >0,"Insuficient funds");
+      __to.transfer(__available);
+    }
+
+
     //only owner
     function setRandomCost(uint256 _newCost) public onlyOwner {
       costRandom = _newCost;
@@ -219,15 +253,7 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
       paused = _state;
     }
  
-    function withdraw() public {
-      address payable _to=payable(abcPayment);
-      uint256 minAmount=100000000000000;
-      uint256 available=address(this).balance-minAmount;
-      require(available >0,"Insuficient funds");
-      _to.transfer(available);
-      //Address.sendValue(address(abcPayment),address(this).balance);
-      //require(Address(abcVault).send(address(this).balance));
-    }
+
 
     function transferABCVaultOwnership(address _newOwner) public onlyOwner {
       ABCVault _vault = ABCVault(abcVault);
@@ -274,34 +300,96 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
     beltersDayRemaining=0;
   }
 }
-
-
+/*
+ * @title: Asteroid Belt Club Vault Smart Contract
+ * @author: Gustavo Hernandez Baratta  (The Pan de Azucar Bay Company LLC)
+ * @dev: Tiene por objeto acumular los ingresos derivados del registro de reclamos de propiedad sobre los asteroides
+ * y sus posteriores transferencias, asi como cualquier otro ingreso que en el futuro se obtenga y que pase a formar 
+ * parte de los activos que el Club acumulara para perseguir los objetivos comunitarios.
+ * 
+ * Aunque inicialmente la propiedad del contrato estará en manos del contrato ABC, esta previsto que se transfiera a la DAO
+ * una vez que se hayan implementado las funciones que permitan gestionar esta boveda en forma autonoma. Para ello, la funcion 
+ * transferABCVaultOwnership ha sido implementada para ser ejecutada por el ABC Starter (el owner del contrato original) y desarrollador
+ * del proyecto.
+ *
+ * El contrato puede recibir fondos, pero solo puede transferirlos a terceros mediante un mecanismo de tres pasos, uno, en el que se registra
+ * un pago pendiente de aprobacion (funcion addPayment), un segundo que aprueba el pago (funcion aprovePayment) y finalmente uno que lo 
+ * ejecuta (funcion pay). addPayment solo puede ser ejecutado por onlyOwner, por lo que mientras no sea transferida la propiedad de la boveda
+ * a una direccion capaz de ejecutarla, ningun pago podra ser iniciado. Adicionalmente, entre cada una de las instancias se establece un retardo
+ * de 63600 bloques (aproximadamente 10 dias), establecido para alertar a la comunidad sobre una potencial transferencia indebida de fondos.
+ *
+ * Adicionalmente, la boveda recibira la propiedad del token correspondiente al reclamo de propiedad del asteroide 1 (A801 AA - Ceres), 
+ * pero no tiene ninguna funcion que le permita transferirlo a un tercero.  
+ */
 contract ABCVault is IERC721Receiver, Ownable {
-  address public abcStarter;  
 
-  constructor(address _abcStarter) {
-    abcStarter = _abcStarter;
-    
-  }
+  struct payment {
+    string description;
+    address to;
+    uint256 amount;
+    bool aproved;
+    address activator;
+    uint256 validblock;
+    bool paid;     
+  }  
+  mapping(uint256=>payment) public paymentlist;
+  uint256 _paymentCounter;
+  uint256 public constant blocksDelay=63600;
 
-  /* @dev: Vault debe poder recibir los pagos que envie splitter
-   * TODO: Evento que notifique la recepción de pagos
-   */
   receive() external payable {
-
   }
   
   function onERC721Received(address, address, uint256, bytes memory) public virtual override returns (bytes4) {
     return this.onERC721Received.selector;
   }
 
-  function withdraw(address payable _to, uint256 _amount) public payable onlyOwner {
-    require(_amount > address(this).balance, "Not enough funds to transfer that amount");
-    
-    (bool os, ) = _to.call{value: _amount}("");
-    require(os);
+  /* @dev: Permite agendar pago descripto en _description a _to, por un monto _amount, que deberan ser aprobados por _activator.
+   * Solo el owner del contrato puede agendar un pago (inicialmente el contrato ABC, el que no tiene capacidad de llamar esta funcion).
+   * El objetivo es que sea la DAO la que llame esta funcion y delegue a un contrato de votacion su aprobacion. 
+   * La funcion devuelve un id de pago, que será el que deba especificarse en las funciones aprovePayment y pay
+   */
+  function addPayment(string memory _description, address _to, uint256 _amount, address _activator) public onlyOwner returns(uint256) {  
+    require(_amount >0,"Amount must be greather than 0");
+    require(_to != address(0), "Please specify a destination address");
+    require(_activator != address(0), "Please specify an activator address");
+    payment memory __payment;
+    _paymentCounter++;
+    __payment.description=_description;
+    __payment.to=_to;
+    __payment.amount=_amount;
+    __payment.activator=_activator;
+    __payment.validblock=block.number + blocksDelay;
+    paymentlist[_paymentCounter]=__payment;
+    return _paymentCounter;
   }
 
+  /* @dev: Funcion que le permite a la direccion especificada en _activator de la funcion addPayment aprobar el pago
+   * El proposito es que el contrato inteligente donde se someta a votacion el pago ejecute esta función si la misma 
+   * resulto afirmativa. Aunque cualquiera puede ejecutar la funcion, solo desde activator no dara error.
+   */
+  function aprovePayment(uint256 _id) public {
+    require(paymentlist[_id].to != address(0),"Payment don't exist");
+    require(paymentlist[_id].aproved==false,"Payment already aproved");    
+    require(paymentlist[_id].activator==_msgSender(),"Yo cannot aprove this payment");
+    require(paymentlist[_id].validblock < block.number,"Wait for a valid block to aprove payment");
+    paymentlist[_id].validblock=block.number+blocksDelay;
+    paymentlist[_id].aproved=true;    
+  }
+
+  /* @dev: Ejecuta el pago ingresado en addPayment y aprovado en aprovePayment.
+   * Adicionalmente al retardo de blocksDelay desde el momento de la aprobacion, se requiere que el balance de la boveda
+   * tenga fondos suficientes para la transferencia.
+   */
+  function pay(uint256 _id) public {
+    require(paymentlist[_id].to != address(0),"Payment don't exist");
+    require(paymentlist[_id].aproved==true,"Payment not yet aproved");
+    require(paymentlist[_id].paid==false,"Payment already paid");    
+    require(paymentlist[_id].validblock < block.number,"Wait for a valid block to send payment");
+    require(paymentlist[_id].amount <= address(this).balance,"Not enough balance to process this payment");
+    paymentlist[_id].paid=true;
+    address payable __to=payable(paymentlist[_id].to);
+    __to.transfer(paymentlist[_id].amount);
+  }
 }
 
 contract ABCPayments is  PaymentSplitter {
@@ -311,9 +399,3 @@ contract ABCPayments is  PaymentSplitter {
   }
 
 }
-
-/*
-contract ABCGeoAgreement is IERC721Receiver, Ownable {
-
-}
-*/
