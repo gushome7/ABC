@@ -45,15 +45,11 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
   uint256 public constant ownerCanMintMax=499 ether; //500 ether - 1 ether for 20 random minted on constructor
   
   /* Belters Day parameters and stored*/
-  uint256 public beltersDayRemaining=10000;
   mapping(uint256 => uint256) public beltersDayAssigned;
   uint256[] public beltersDay;
   mapping(address => bool) public belters;
-  uint8 constant beltersDayMonth=4;
-  uint8 constant beltersDayDay=12;
-  uint16 constant beltersDayStartingYear=2022;
-  uint256 constant beltersDayStartingAmount=4000;
-  uint256 constant beltersDayFactor=2;
+
+  /* ABC Vault and Payment Splitter address filled at deployment */
   address payable public abcVault;
   address public abcPayment;
 
@@ -275,29 +271,51 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
 
 
     /* @dev: Create Belters Day information
-    * Set the dates for the next 21 Belters Days and assign the number of NFTs that will be minted for free, according to the white paper.
-    * First Year (beltersDayStartingYear) will mint for free beltersDayStartingAmount, which is reduced by dividing it by the beltersDayFactor.
-    * Finally 100 free NFTs are added, to complete the total of 10.000 initials.
-    * @author: Gustavo Hernandez Baratta for The Pan de Azucar Bay LLC
-    * @version: 0.1A
+    * Set the dates for the next 20 Belters Days and assign the number of NFTs that will be minted for free, according to the white paper.
+    * Belters Day July 7th.
     */
 
   function _assignBeltersDay() private {
-    uint toAssign=beltersDayStartingAmount;
-    uint16 year=beltersDayStartingYear;
-    uint bd;
-    for(uint8 i; i<20;i++) {
-      bd=DateTime.toTimestamp(year,beltersDayMonth,beltersDayDay);
-      beltersDay.push(bd);
-      beltersDayAssigned[bd]=toAssign+100;
-      beltersDayRemaining=beltersDayRemaining-(toAssign+100);
-      toAssign=toAssign/beltersDayFactor;
-      year=year+1;
-    }
-    bd=DateTime.toTimestamp(year,beltersDayMonth,beltersDayDay);
-    beltersDay.push(bd);
-    beltersDayAssigned[bd]=beltersDayRemaining;
-    beltersDayRemaining=0;
+    beltersDay.push(1656633600); // year: 2022
+    beltersDay.push(1688169600); // year: 2023
+    beltersDay.push(1719792000); // year: 2024
+    beltersDay.push(1751328000); // year: 2025
+    beltersDay.push(1782864000); // year: 2026
+    beltersDay.push(1814400000); // year: 2027
+    beltersDay.push(1846022400); // year: 2028
+    beltersDay.push(1877558400); // year: 2029
+    beltersDay.push(1909094400); // year: 2030
+    beltersDay.push(1940630400); // year: 2031
+    beltersDay.push(1972252800); // year: 2032
+    beltersDay.push(2003788800); // year: 2033
+    beltersDay.push(2035324800); // year: 2034
+    beltersDay.push(2066860800); // year: 2035
+    beltersDay.push(2098483200); // year: 2036
+    beltersDay.push(2130019200); // year: 2037
+    beltersDay.push(2161555200); // year: 2038
+    beltersDay.push(2193091200); // year: 2039
+    beltersDay.push(2224713600); // year: 2040
+    beltersDay.push(2256249600); // year: 2041
+    beltersDayAssigned[1656633600]=4100;
+    beltersDayAssigned[1688169600]=2100;
+    beltersDayAssigned[1719792000]=1100;
+    beltersDayAssigned[1751328000]=600;
+    beltersDayAssigned[1782864000]=350;
+    beltersDayAssigned[1814400000]=225;
+    beltersDayAssigned[1846022400]=162;
+    beltersDayAssigned[1877558400]=131;
+    beltersDayAssigned[1909094400]=115;
+    beltersDayAssigned[1940630400]=107;
+    beltersDayAssigned[1972252800]=103;
+    beltersDayAssigned[2003788800]=101;
+    beltersDayAssigned[2035324800]=101;
+    beltersDayAssigned[2066860800]=101;
+    beltersDayAssigned[2098483200]=101;
+    beltersDayAssigned[2130019200]=101;
+    beltersDayAssigned[2161555200]=101;
+    beltersDayAssigned[2193091200]=101;
+    beltersDayAssigned[2224713600]=100;
+    beltersDayAssigned[2256249600]=100;
   }
 }
 /*
@@ -336,7 +354,14 @@ contract ABCVault is IERC721Receiver, Ownable {
   uint256 _paymentCounter;
   uint256 public constant blocksDelay=63600;
 
+  event PaymentReceived(address indexed from, uint256 amount, uint256 balance);
+  event PaymentAdded(address indexed sender, address indexed to, address indexed activator, uint256 amount, string description, uint256 id, uint256 delayedto);
+  event PaymentAproved(uint256 id, address aprover, uint256 currentBlock, uint256 delayed);
+  event Paid(uint256 id, address executor, uint256 currentBlock, uint256 balance );
+
+
   receive() external payable {
+    emit PaymentReceived(_msgSender(), msg.value, address(this).balance);
   }
   
   function onERC721Received(address, address, uint256, bytes memory) public virtual override returns (bytes4) {
@@ -360,6 +385,7 @@ contract ABCVault is IERC721Receiver, Ownable {
     __payment.activator=_activator;
     __payment.validblock=block.number + blocksDelay;
     paymentlist[_paymentCounter]=__payment;
+    emit PaymentAdded(_msgSender(),_to,_activator,_amount,_description,_paymentCounter,__payment.validblock);
     return _paymentCounter;
   }
 
@@ -373,7 +399,9 @@ contract ABCVault is IERC721Receiver, Ownable {
     require(paymentlist[_id].activator==_msgSender(),"Yo cannot aprove this payment");
     require(paymentlist[_id].validblock < block.number,"Wait for a valid block to aprove payment");
     paymentlist[_id].validblock=block.number+blocksDelay;
-    paymentlist[_id].aproved=true;    
+    paymentlist[_id].aproved=true;
+    emit PaymentAproved(_id,_msgSender(), block.number, paymentlist[_id].validblock);
+
   }
 
   /* @dev: Ejecuta el pago ingresado en addPayment y aprovado en aprovePayment.
@@ -389,8 +417,16 @@ contract ABCVault is IERC721Receiver, Ownable {
     paymentlist[_id].paid=true;
     address payable __to=payable(paymentlist[_id].to);
     __to.transfer(paymentlist[_id].amount);
+    emit Paid(_id, _msgSender(), block.number, address(this).balance);
   }
 }
+
+
+/* @title: ABCPayments
+ * @dev: Contrato que recibe todos los pagos y divide los ingresos entre las wallets indicadas en el costructor, de 
+ * acuerdo a los porcentajes derivados de todos los shares indicados.
+ * 
+ */
 
 contract ABCPayments is  PaymentSplitter {
 
