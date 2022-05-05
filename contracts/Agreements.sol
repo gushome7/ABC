@@ -126,8 +126,7 @@ abstract contract Agreements is Ownable {
         agreementTokens[_tokenId]=_msgSender();
     }
 
-    /* @dev Crea un acuerdo inactivo. ABC Starter es por ahora el owner de la opcion de crear agreements
-     * aunque no de activarlos. 
+    /* @dev Crea un acuerdo inactivo. Solo la DAO puede crear acuerdos.
      * @params:
      * name: identification of the agreement
      * description: a brief description

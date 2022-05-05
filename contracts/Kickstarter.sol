@@ -91,6 +91,7 @@ abstract contract Kickstarter {
      */
 
     function kickStartTransfer(address _to, uint256 _amount  ) public {
+        require(_to != address(0), "Please transfer your balance to a real address!");
         require(kickStarters[msg.sender] >=_amount, "You must have at least the amount in your kickstart balance");
         kickStarters[msg.sender] = kickStarters[msg.sender] - _amount;
         kickStarters[_to]=kickStarters[_to] + _amount;
