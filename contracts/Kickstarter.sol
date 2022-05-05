@@ -27,6 +27,8 @@ abstract contract Kickstarter {
     uint256 public ownerMinted=0; //Token minted by owner using constructor credit;
     address private _owner=address(0);
 
+    event KickstartBalanceTransfered(address from, address to,  uint256 amount);
+
     constructor(uint256 _credit) {
 
       kickStarters[msg.sender]=_credit;
@@ -83,8 +85,18 @@ abstract contract Kickstarter {
         kickStarters[msg.sender]=kickStarters[msg.sender]+(msg.value*boost[0]);
         kickStartCollected=kickStartCollected+msg.value;
         _registerTotal(msg.value);
-  }
+    }
 
-  function _registerTotal(uint256 value) internal virtual {}
+    /* @dev: Permite al titular de saldo en el programa kickstart transferirlo a un tercero. 
+     */
+
+    function kickStartTransfer(address _to, uint256 _amount  ) public {
+        require(kickStarters[msg.sender] >=_amount, "You must have at least the amount in your kickstart balance");
+        kickStarters[msg.sender] = kickStarters[msg.sender] - _amount;
+        kickStarters[_to]=kickStarters[_to] + _amount;
+        emit KickstartBalanceTransfered(msg.sender, _to, _amount);
+    }
+
+    function _registerTotal(uint256 value) internal virtual {}
 
 }    
