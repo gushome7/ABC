@@ -3,8 +3,12 @@
  * @title: Asteroid Belt Club NFT Strategic Agreements
  * @author: Gustavo Hernandez Baratta  (The Pan de Azucar Bay Company LLC)
  * Extension de Acuerdos Estrategicos del ABC.
+ * Los acuerdos estrategicos permiten mintear NFT por encima de la cantidad maxima establecida en venta, pero los NFT
+ * minteados no tendran los mismos derechos en la DAO que los demas, de acuerdo a lo establecido en el Whitepaper.
+ * Los acuerdos estrategicos solo podran ser creados desde la direccion de la DAO,  y aprobados desde la direccion
+ * del contrato donde el acuerdo sea sometido a votacion. Mientras la DAO no este en funcionamiento la capacidad de 
+ * crear acuerdos estara deshabilitada.
  * 
- 
  * email: ghernandez@pandeazucarbay.com
  */
 
@@ -27,6 +31,7 @@ abstract contract Agreements is Ownable {
 
     mapping(address => agreement) private _agreements;
     mapping(uint256 => address) public agreementTokens;
+    address private _dao;
     address[] private _idagreements;
 
     uint256 public agreementMinted=0;
@@ -34,9 +39,48 @@ abstract contract Agreements is Ownable {
 
     uint256 public constant blocksDelay=63600;
 
+    event NewDaoAddress(address oldDao, address newDao);
+    event AgreementUsed(address agreement, uint256 amount, uint256 tokens);
+    event AgreementAproved(uint256 id, uint256 sinceBlock);
+    event NewAgreementProposed(uint256 id, string name, string description, uint256 credit, address activator, address beneficiary, uint256 blocksDelay);
+
+
     constructor() {
+        _setDaoAddress(address(0));
         _idagreements.push(address(0)); //To get all real agreements over 0 index
     }
+
+    /**
+     * @dev Returns the address of the current owner.
+     */
+    function dao() public view returns (address) {
+        return _dao;
+    }
+
+    /**
+     * @dev Throws if called by any account other than the dao.
+     * Adaptada de Ownable.
+     */
+    modifier onlyDao() {
+        require(dao() != address(0), "DAO Address not configured");
+        require(dao() == _msgSender(), "Ownable: caller is not the Dao");
+        _;
+    }
+    /**
+     * @dev Set New Dao Address.
+     */
+    function setDaoAddress(address newAddress) public onlyOwner {
+        require(newAddress != address(0), "Please set a valid Dao address");
+        _setDaoAddress(newAddress);
+    }
+
+    function _setDaoAddress(address newDao) internal {
+        address oldDao = _dao;
+        _dao = newDao;
+        emit NewDaoAddress(oldDao, newDao);
+    }
+
+
 
     /* @dev: Devuelve un array con todas las direcciones de titulares de acuerdos
     */
@@ -44,17 +88,13 @@ abstract contract Agreements is Ownable {
         return(_idagreements);
     }
 
-    /* Devuelve los datos del agreement con el titular de la direccion indicada en address
-     * Parametros:
-     * _address: direccion del titular del acuerdo.
+    /* @dev: Devuelve los datos del agreement con el titular de la direccion indicada en address
      */
     function getAgreement(address _address) public view returns(agreement memory) {
         return(_agreements[_address]);
     }
 
     /* @dev: permite consultar el credito disponible del acuerdo para mintear tokens 
-     * Params:
-     * address: la direccion del titular del acuerdo.
      */
     function getAgreementBalance(address _address) public view returns(uint256) {
         if(_agreements[_address].active && block.number > _agreements[_address].validblock ) {
@@ -66,9 +106,6 @@ abstract contract Agreements is Ownable {
     /* @dev: actualiza el saldo disponible para mintear tokens, restando el costo del o de los tokens minteados
      * La funcion mint la llama el titular del credito disponible, por lo que es su cuenta la que se reduce en el
      * costo de lo minteado.
-     * Params:
-     * _addused: costo de los nft minteados
-     * _count: cantidad de tokens minteados.
      */
 
     function updateAgreementBalance(uint256 _amount, uint256 _tokens) internal {
@@ -78,6 +115,7 @@ abstract contract Agreements is Ownable {
         _agreements[_msgSender()].used=_agreements[_msgSender()].used+_amount;
         agreementUsed=agreementUsed+_amount;
         agreementMinted=agreementMinted+_tokens;
+        emit AgreementUsed(_msgSender(),_amount, _tokens);
     }
 
     /* @dev: Mantiene una lista de los Ids de tokens.
@@ -100,7 +138,7 @@ abstract contract Agreements is Ownable {
      * reaccionar en caso de un acuerdo creado en forma espurea.
      */
 
-    function createAgreement(string memory _name, string memory _description, uint256 _credits, address _activator, address _address) public onlyOwner {
+    function createAgreement(string memory _name, string memory _description, uint256 _credits, address _activator, address _address) public onlyDao {
         agreement memory _agreement;
         _agreement.id=_idagreements.length;
         _agreement.name=_name;
@@ -111,6 +149,7 @@ abstract contract Agreements is Ownable {
         _agreement.validblock=block.number+blocksDelay;
         _idagreements.push(_address);
         _agreements[_address]=_agreement;
+        emit NewAgreementProposed(_agreement.id, _name, _description, _credits, _activator, _address, _agreement.validblock);        
     }
 
     /* @dev: Esta funcion debe ser llamada por el contrato de la DAO donde se someta a votacion el agreement
@@ -131,6 +170,8 @@ abstract contract Agreements is Ownable {
         require(_agreements[_agreement].active==false,"Agreement already active");
         _agreements[_agreement].active=true;
         _agreements[_agreement].validblock=block.number+blocksDelay;
+
+        emit AgreementAproved(_id, _agreements[_agreement].validblock);
     }
 
 }    

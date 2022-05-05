@@ -2,8 +2,8 @@
 /*
  * @title: Asteroid Belt Club NFT Strategic Agreements
  * @author: Gustavo Hernandez Baratta  (The Pan de Azucar Bay Company LLC)
- * @dev Smart contract for the creation and management of the NFTs corresponding
- * to the first property claim on the asteroids of the Asteroid Belt.
+ * @dev Funciones que implementan el programa kickstart.
+ * 
  
  * email: ghernandez@pandeazucarbay.com
  */
@@ -33,6 +33,8 @@ abstract contract Kickstarter {
       _owner=msg.sender;
     }
 
+    /* @dev: Calcula la recompensa y el umbral actual del programa kickstart de acuerdo al total colectado.
+     */
     function kickStartThreshold() public view returns (uint256[] memory) {
         uint256[] memory boost = new uint256[](2);
         
@@ -46,11 +48,15 @@ abstract contract Kickstarter {
         return(boost);
     }
 
+    /* @dev: Devuelve el balance actual de una direccion dada
+     */
     function getKickStartBalance(address _address) public view returns(uint256) {
         return(kickStarters[_address]);
     }
  
-    function updateKickStartBalance(uint256 _cost,uint256 _minted) public {
+    /* @dev: Actualiza el balance de una cuenta, y los contadores de total gastado y cantidad minteada
+     */
+    function updateKickStartBalance(uint256 _cost,uint256 _minted) internal {
         require(kickStarters[msg.sender] >= _cost, "Not enough balance");
         kickStarters[msg.sender]=kickStarters[msg.sender]-_cost;
         if(msg.sender != _owner) {
@@ -63,16 +69,22 @@ abstract contract Kickstarter {
         }
     }
    
-
+    /* @dev: Crea o actualiza el balance de una cuenta del programa kickstart con la recomensa correspondiente
+     * al umbral actual. El monto enviado debe ser mayor a kickStartMin, y menor o igual al monto restante del umbral actual.
+     * 
+     */
     function kickstart() public payable {
         uint256[] memory boost= kickStartThreshold();
         
-        require(boost[0] > 0, 'KickStart ended. Thanks!');
-        require(boost[1] >=msg.value, string(abi.encodePacked('Please send no more than ', boost[1].toString())));
-        require(msg.value >= kickStartMin, string(abi.encodePacked('Must send at least ', kickStartMin.toString())));
+        require(boost[0] > 0, "KickStart ended. Thanks!");
+        require(boost[1] >=msg.value, string(abi.encodePacked("Please send no more than ", boost[1].toString())));
+        require(msg.value >= kickStartMin, string(abi.encodePacked("Must send at least ", kickStartMin.toString())));
 
         kickStarters[msg.sender]=kickStarters[msg.sender]+(msg.value*boost[0]);
-        kickStartCollected=kickStartCollected+msg.value;  
+        kickStartCollected=kickStartCollected+msg.value;
+        _registerTotal(msg.value);
   }
+
+  function _registerTotal(uint256 value) internal virtual {}
 
 }    
