@@ -45,7 +45,7 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
   bool public paused = false;
 
   /* ABC Starter Minting Privileges passed to kickstarter*/
-  uint256 public constant ownerCanMintMax=499 ether; //500 ether - 1 ether for 20 random minted on constructor
+  uint256 public constant ownerCanMintMax=999 ether; //1000 ether - 1 ether for 20 random minted on constructor
   
   /* Belters Day parameters and stored*/
   mapping(uint256 => uint256) public beltersDayAssigned;
@@ -63,9 +63,13 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
   event Withdrawn(address sender, uint256 amount);
   event NewMaxSupply(uint256 oldMaxSupply, uint256 newMaxSupply);
   event URIChanged(uint256 indexed tokenId, string newURI);
+  event RightsUpgraded(uint256 indexed tokenId);
 
   constructor( string memory _initBaseURI) ERC721(_name, _symbol) Kickstarter(ownerCanMintMax) {
     _ansAddress=address(0);
+    uint256[] memory _ceres=new uint256[](1);
+    uint256[] memory _dumb=new uint256[](0);
+    _ceres[0]=1;
     abcVault = payable(new ABCVault());
     address[] memory _payees=new address[](2);
     uint256[] memory _shares=new uint256[](2);
@@ -77,8 +81,8 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
     _setDefaultRoyalty(abcPayment, royaltyFee); //Royalties must be paid directly to abcPayment.
     setBaseURI(_initBaseURI);  
     _assignBeltersDay(); //Belters Day Assignment.
-    mint(abcVault,1,1); //Ceres will remain in ABC property forever. Minted and transfered to ABCVault    
-    mint(owner(), 0, 20); //Mint 20 random asteroids to start secondary market at marketplaces and transfer to owner()
+    mint(abcVault,_ceres,1); //Ceres will remain in ABC property forever. Minted and transfered to ABCVault    
+    mint(owner(), _dumb, 20); //Mint 20 random asteroids to start secondary market at marketplaces and transfer to owner()
   }
 
   /* @dev: Este contrato se desarrollo de acuerdo a las reglas que definen el funcionamiento de la comunidad Asteroid Belt Club
@@ -100,8 +104,8 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
 
   }
 
-  /* @dev: Mintea el token especificado en tokenId, o selecciona en forma random hasta la cantidad establecida en _toMint.
-   * _toMint no puede ser mayor a maxMinting.
+  /* @dev: Mintea el o los tokens especificados en tokenIds, o selecciona en forma random hasta la cantidad establecida en _toMint.
+   * _toMint no puede ser mayor a maxMinting. Cuando se especifican tokenIds _toMint se ajusta a la cantidad.
    * La coleccion no tendra mas que maxSupply elementos. maxSupply es la cantidad de asteroides numerados por el IAU
    * Aunque maxSupply se vaya actualizando en el tiempo, no afectara la cantidad de elementos de la coleccion en la medida que
    * no se mintearan mas que maxToSale para ser vendidos y este limite permanecera inalterado.
@@ -109,52 +113,55 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
    * de acuerdos o convenios (reserva estrategica), lo que será decidido por los miembros del ABC.
    * El costo base del minteo sera costRandom cuando no se especifique tokenId, o costSelected cuando se elija uno para mintear
    */
-  function mint(address _to, uint256 tokenId, uint256 _toMint) public payable {
-    uint256 supply = totalSupply();
-    uint256 cost = costRandom;
-    bool agreement=false;
+  function mint(address _to, uint256[] memory _tokenIds, uint256 _toMint) public payable {
+    uint256 __supply = totalSupply();
+    uint256 __cost = costRandom;
+    uint256 __tokenId=0;
+    bool __agreement=false;
     require(!paused, "Minting paused. Try again later");
-    require(_toMint <= maxMinting,string(abi.encodePacked("Please mint no more that ",maxMinting.toString()," per call")));
-    require(supply+_toMint < maxSupply, "Currently no NFT left to mint");
-    require((supply+_toMint - agreementMinted) < maxToSale, "Currently no NFT left to mint");
+    
+    require(__supply + _toMint < maxSupply, "Currently no NFT left to mint");
+    require((__supply + _toMint - agreementMinted) < maxToSale, "Currently no NFT left to mint");
+
     if(_toMint==0) {
       _toMint=1;
     }
 
-    if(tokenId >0) {
-      require(_toMint==1, "If specify tokenId you can mint only one NFT");
-      require(!_exists(tokenId), "Token already minted ");
-      cost = costSelected;
-      _toMint=1;
+    if(_tokenIds.length >0) {
+      __cost= costSelected;
+      _toMint=_tokenIds.length;
     }
-    cost=cost*_toMint;
-    
-    if(msg.value==0 && getKickStartBalance(_msgSender()) >= cost) {
-      updateKickStartBalance(cost,_toMint);
+    __cost=__cost * _toMint;
+    require(_toMint <= maxMinting,string(abi.encodePacked("Please mint no more that ",maxMinting.toString()," per call")));
+    if(msg.value==0 && getKickStartBalance(_msgSender()) >= __cost) {
+      updateKickStartBalance(__cost,_toMint);
     }
-    else if(msg.value==0 && getAgreementBalance(_msgSender())>=cost) {
-      updateAgreementBalance(cost,_toMint);
-      agreement=true;
+    else if(msg.value==0 && getAgreementBalance(_msgSender())>=__cost) {
+      updateAgreementBalance(__cost,_toMint);
+      __agreement=true;
     }
     else {
-      require(msg.value == cost,string(abi.encodePacked("To do this mint you must send ", cost.toString())));
+      require(msg.value == __cost,string(abi.encodePacked("To do this mint you must send ", __cost.toString())));
     }
-    
     _registerTotal(msg.value);
-    if(tokenId==0) {
+    if(_tokenIds.length==0) {      
       for(uint256 i=0; i<_toMint; i++) {
-        tokenId=Random.generate(2,maxSupply,tokenId);
-        if(agreement) {
-          updateTokensMinted(tokenId);
+        __tokenId=_getRandomTokenId(__tokenId);
+        if(__agreement) {
+          updateTokensMinted(__tokenId);
         }
-        _safeMint(_to,tokenId);
+        _safeMint(_to,__tokenId);
       }
     }
     else {
-      if(agreement) {
-        updateTokensMinted(tokenId);
+      for(uint256 i=0; i<_tokenIds.length; i++) {
+        __tokenId=_tokenIds[i];      
+        require(!_exists(__tokenId), "Token already minted ");
+        if(__agreement) {
+          updateTokensMinted(__tokenId);
+        }
+      _safeMint(_to,__tokenId);      
       }
-      _safeMint(_to,tokenId);      
     }   
   }
 
@@ -229,6 +236,20 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
       }
     }
 
+    /* @dev: Si los tokens emitidos por un acuerdo pueden obtener derechos totales, esta funcion la que
+     * los otorga si el pago recibido es el estipulado en el acuerdo.
+     */
+    function giveMeDaoRights(uint256 _tokenId) public payable {        
+        require(_exists(_tokenId), "Token not minted");
+        require(agreementTokens[_tokenId] != address(0), "Token have full rights");
+        agreement memory _agreement=getAgreement(agreementTokens[_tokenId]);
+        require(_agreement.befull>0, "Agreement don't allow improve token rights");
+        require(msg.value==_agreement.befull,string(abi.encodePacked("You must send ", _agreement.befull.toString()," to get full rights")));
+        delete agreementTokens[_tokenId];
+        emit RightsUpgraded(_tokenId);
+    }
+
+
   /* @dev: Transfiere fondos hacia el Payment Splitter
    * La funcion permanece publica para que cualquiera pueda iniciar las transferencias, lo que evita que los fondos permanezcan 
    * rehenes en el contrato, en caso de existir discrepancias entre los beneficiarios finales de los fondos.
@@ -248,7 +269,8 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
      * La funcion no podra ser utilizada mas de una vez por token. ANS no llamara a esta funcion si el asteroide fue nombrado
      * por la IAU.
      */
-    function ansSetNewURI(uint256 _tokenId, string memory _newURI) public {
+    function ansSetNewURI(uint256 _tokenId, address _owner, string memory _newURI) public {
+        require(ownerOf(_tokenId)==_owner, "Not the owner");
         require(_msgSender() == _ansAddress, "Only Asteroid Naming Services can call that function");
         require(_exists(_tokenId), "Token not yet minted");
         require(bytes(_newURI).length >0, "Please set a new URI");
@@ -333,8 +355,11 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
 
     function _getRandomTokenId(uint256 _seed) private view returns (uint256) {
       uint256 tokenId=Random.generate(2,maxToSale,_seed);
+      uint16 iterations=0;
       while(_exists(tokenId)) {
         tokenId=Random.generate(2,maxToSale,tokenId);
+        iterations++;
+        require(iterations < 200, "Please retry");
       } 
       return tokenId;
     }

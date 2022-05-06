@@ -8,6 +8,8 @@
  * Los acuerdos estrategicos solo podran ser creados desde la direccion de la DAO,  y aprobados desde la direccion
  * del contrato donde el acuerdo sea sometido a votacion. Mientras la DAO no este en funcionamiento la capacidad de 
  * crear acuerdos estara deshabilitada.
+ * Al momento de creacion del acuerdo, puede establecerse el importe que puede ser pago para volver al titular del NFT
+ * un miembro pleno del ABC. Si el importe es 0 la funcionalidad queda deshabilitada para ese acuerdo.
  * 
  * email: ghernandez@pandeazucarbay.com
  */
@@ -27,6 +29,7 @@ abstract contract Agreements is Ownable {
         bool active;
         address activator;
         uint256 validblock;
+        uint256 befull;
     }
 
     mapping(address => agreement) private _agreements;
@@ -49,6 +52,7 @@ abstract contract Agreements is Ownable {
         _setDaoAddress(address(0));
         _idagreements.push(address(0)); //To get all real agreements over 0 index
     }
+
 
     /**
      * @dev Returns the address of the current owner.
@@ -133,11 +137,12 @@ abstract contract Agreements is Ownable {
      * credits: amount to be assigned
      * activator: address authorized to activate agreement
      * address: if active, from what address can mint using credit.
+     * befull: amount que debe pagar el tenedor del NFT para volverse miembro pleno del ABC. cero cierra la posibilidad.
      * El agreement no puede ser activado antes del bloque establecido en ValidBlock. Esto da a la comunidad un time frame para
      * reaccionar en caso de un acuerdo creado en forma espurea.
      */
 
-    function createAgreement(string memory _name, string memory _description, uint256 _credits, address _activator, address _address) public onlyDao {
+    function createAgreement(string memory _name, string memory _description, uint256 _credits, address _activator, address _address, uint256 _befull) public onlyDao {
         agreement memory _agreement;
         _agreement.id=_idagreements.length;
         _agreement.name=_name;
@@ -146,6 +151,7 @@ abstract contract Agreements is Ownable {
         _agreement.active=false;
         _agreement.activator=_activator;
         _agreement.validblock=block.number+blocksDelay;
+        _agreement.befull=_befull;
         _idagreements.push(_address);
         _agreements[_address]=_agreement;
         emit NewAgreementProposed(_agreement.id, _name, _description, _credits, _activator, _address, _agreement.validblock);        
