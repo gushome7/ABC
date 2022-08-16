@@ -9,466 +9,572 @@
  *
  */
 
-pragma solidity ^0.8.1;
+pragma solidity ^0.8.14;
 
 import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/token/common/ERC2981.sol";
 import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/access/Ownable.sol";
 import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/token/ERC721/IERC721Receiver.sol";
 
+import "./utils/Signature.sol";
 import "./Agreements.sol";
 import "./Kickstarter.sol";
 import "./utils/Random.sol";
 import "./utils/PaymentSplitter.sol";
 
+
 contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
   using Strings for uint256;
+  
 
   /* ABC Collection parameters and stored data */    
   string public baseURI; 
   string public constant baseExtension = ".json";
   string public constant _name='Asteroid Belt Club';
   string public constant _symbol='ABC';
-  uint96 royaltyFee=1000; //10%
+  uint96 royaltyFee=1000; //10% Subsequent transfers made in fee-based markets
+  
 
   /* Asteroid Naming Services*/
   mapping(uint256 => string) private _ansModifiedURI; //Asteroid Naming Services Modifier;
-  address private _ansAddress;
+  address private _ansAddress=address(0); //Pending to be defined using setAnsAddress()
 
+ /* Asteroid Belt Club Web Signature */
+  address private _signatureWallet=address(0); //Pending to be defined using setSignatureWallet()
+  mapping(string => bool) private _usedUniqids; //On random minting, a random selection could be used only once
   
-  uint256 public costRandom = 0.05 ether;
-  uint256 public costSelected = 1 ether;
-  uint256 public maxSupply = 605011;
-  uint256 public maxToSale = 550000;
-  uint256 public totalSales = 0; //
-  uint256 public constant maxMinting=200; //Cantidad maxima de tokens a mintear en una llamada a mint()
-  bool public paused = false;
+  uint256 public maxSupply = 605011; //Initially, the asteroids numbered by the IAU as of December 31, 2021 are contemplated,
+                                     //then others will be incorporated according to the schedule established in the Whitepaper.
+
+  uint256 public constant maxToSale = 550000; //Max membership
+  uint256 public totalSales = 0; //Total incomes
+  uint256 public constant maxMinting=10; //Cantidad maxima de tokens a mintear en una llamada a mint()
+  bool public paused = false; //Emergency pause
 
   /* ABC Starter Minting Privileges passed to kickstarter*/
-  uint256 public constant ownerCanMintMax=999 ether; //1000 ether - 1 ether for 20 random minted on constructor
+  uint256 public constant ownerCanMintMax=1000 ether; //Buying power granted to Igniter (see Whitepaper)
+  uint8 public constant ownerInitialMinting=10; //10 random claims created to start markets like Opensea
   
-  /* Belters Day parameters and stored*/
-  mapping(uint256 => uint256) public beltersDayAssigned;
-  uint256[] public beltersDay;
-  mapping(address => bool) public belters;
-
   /* ABC Vault and Payment Splitter address filled at deployment */
   address payable public abcVault;
   address public abcPayment;
 
+
+  /* ABC referer program */
+  uint256 public referrersPaid = 0; //Total commissions generated with the referral program
+  uint256 public referrersWidthrawn = 0; //Withdrawn commissiones
+  uint96 private constant referrerFee = 300; //3% 
+  uint96 private constant referrerFeeDenominator=10000;
+  mapping(address => uint256) private _referrerBalance; //Referral Program Balances
+
+  /* ABC Belter's Day */
+  uint16 public beltersDayMinted =0; //Minted counter
+  uint16 public constant beltersDayMax=10000;  //Max to mint
+
+  /* Events */
   event PaymentReceived(address from, uint256 amount);
   event VaultOwnerShipTransfered(address newOwner);
   event StateChanged(bool newState);
-  event NewCosts(uint256 oldSelected, uint256 oldRandom, uint256 newSelected, uint256 newRandom);
   event Withdrawn(address sender, uint256 amount);
   event NewMaxSupply(uint256 oldMaxSupply, uint256 newMaxSupply);
   event URIChanged(uint256 indexed tokenId, string newURI);
   event RightsUpgraded(uint256 indexed tokenId);
+  event ReferrerPaid(address referer, uint256 amount);
+  event ReferrerWidthraw(address referer, uint256 amount );
 
+  
   constructor( string memory _initBaseURI) ERC721(_name, _symbol) Kickstarter(ownerCanMintMax) {
-    _ansAddress=address(0);
-    uint256[] memory _ceres=new uint256[](1);
-    uint256[] memory _dumb=new uint256[](0);
-    _ceres[0]=1;
-    abcVault = payable(new ABCVault());
-    address[] memory _payees=new address[](2);
-    uint256[] memory _shares=new uint256[](2);
-    _payees[0]=abcVault;
-    _payees[1]=_msgSender();
-    _shares[0]=70;
-    _shares[1]=30;
-    abcPayment = address(new ABCPayments(_payees,_shares));
+    //ABC Vault is where the CLUB will store its assets
+    abcVault = payable(new ABCVault()); 
+    address[] memory __payees=new address[](2);
+    uint256[] memory __shares=new uint256[](2);
+    __payees[0]=abcVault;
+    __payees[1]=_msgSender();
+    __shares[0]=70;
+    __shares[1]=30;
+    //Launch payment splitter with unchangeable parameters.
+    abcPayment = address(new ABCPayments(__payees,__shares));
     _setDefaultRoyalty(abcPayment, royaltyFee); //Royalties must be paid directly to abcPayment.
     setBaseURI(_initBaseURI);  
-    _assignBeltersDay(); //Belters Day Assignment.
-    mint(abcVault,_ceres,1); //Ceres will remain in ABC property forever. Minted and transfered to ABCVault    
-    mint(owner(), _dumb, 20); //Mint 20 random asteroids to start secondary market at marketplaces and transfer to owner()
-  }
-
-  /* @dev: Este contrato se desarrollo de acuerdo a las reglas que definen el funcionamiento de la comunidad Asteroid Belt Club
-   * El documento que las contiene esta disponible en la direccion que devuelve esta funcion
-   */
-  function manifest() public pure returns(string memory) {
-    return "ipfs://ladireccionipfsdelmanifiesto.pdf";
+    _initialMint();
   }
 
   function supportsInterface(bytes4 interfaceId) public view virtual override(ERC2981, ERC721Enumerable) returns (bool) {
     return super.supportsInterface(interfaceId);
   }
 
-  /* @dev: Fallback para recibir pagos directos al contrato.
-   * TODO: Emitir evento pago recibido.
-   */
+  /* @dev: Direct payments to the contract not covered by a specific function */
   receive() external payable  {      
     emit PaymentReceived(_msgSender(), msg.value);
 
   }
-
-  /* @dev: Mintea el o los tokens especificados en tokenIds, o selecciona en forma random hasta la cantidad establecida en _toMint.
-   * _toMint no puede ser mayor a maxMinting. Cuando se especifican tokenIds _toMint se ajusta a la cantidad.
-   * La coleccion no tendra mas que maxSupply elementos. maxSupply es la cantidad de asteroides numerados por el IAU
-   * Aunque maxSupply se vaya actualizando en el tiempo, no afectara la cantidad de elementos de la coleccion en la medida que
-   * no se mintearan mas que maxToSale para ser vendidos y este limite permanecera inalterado.
-   * El resto de los asteroides podran ser minteados para ser transferidos en el marco
-   * de acuerdos o convenios (reserva estrategica), lo que será decidido por los miembros del ABC.
-   * El costo base del minteo sera costRandom cuando no se especifique tokenId, o costSelected cuando se elija uno para mintear
+  /* @dev: Mints one or more NFTs up to the maximum specified in maxMinting.
+   * The function call is signed, so it can only be called from the CLUB web site.
+   * @params:
+   * _to the owner of the minted tokens
+   * _referrer, address of referrer or address(0)
+   * _tokenIds, array with token to be minted
+   * _cost, total cost of minting _tokenIds.
+   * _msgHash, obtained from concatenating _to, _referrer, ids, _cost
+   * _signature, signature of the transaction
+   * The execution is interrupted if: the contract is paused, if it was not specified which tokenIds want to be minted; 
+   * if _cost parameter is 0.
+   * If it is intended to mint more than maxMinting in the function call; If all NFTs representing claims on the 
+   * total numbered asteroids already incorporated (maxSupply) have been minted; If it is not minting by strategic agreement 
+   * but the maxToSale limit was reached; If the amount transferred in the call is greater than zero but different from _cost; 
+   * If the amount is zero but there are no funds in either agreements or kickStarter covering the cost;  
+   * Or if simultaneously with the call the asteroid was already claimed.
+   * 
    */
-  function mint(address _to, uint256[] memory _tokenIds, uint256 _toMint) public payable {
+  function mint(address _to, address _referrer, uint256[] memory _tokenIds, uint256 _cost,  bytes32 _msgHash, bytes memory _signature) external payable {
     uint256 __supply = totalSupply();
-    uint256 __cost = costRandom;
-    uint256 __tokenId=0;
+    uint256 __realMaxToSale = maxToSale - (beltersDayMax-beltersDayMinted); //Belter's Day raffles must be reserved
     bool __agreement=false;
+
     require(!paused, "Minting paused. Try again later");
+    require(_tokenIds.length >0, "Specify at least one tokenId");
+    require(_cost >0, "Direct mint for free not allowed");
+    require(_tokenIds.length <= maxMinting,string(abi.encodePacked("Mint no more that ",maxMinting.toString()," per call")));
+    require(__supply + _tokenIds.length < maxSupply, "Currently no NFT left to mint");
+
+    if(getAgreementBalance(_msgSender()) < _cost || msg.value > 0 ) {
+      require((__supply + _tokenIds.length - agreementMinted) < __realMaxToSale, "Currently no NFT left to mint");
+    }
+
+    require(msg.value==0 || msg.value==_cost, string(abi.encodePacked("Amount invalid ",_cost.toString())));
+
     
-    require(__supply + _toMint < maxSupply, "Currently no NFT left to mint");
-    require((__supply + _toMint - agreementMinted) < maxToSale, "Currently no NFT left to mint");
-
-    if(_toMint==0) {
-      _toMint=1;
+    string memory __implodedIds=_implodeIds(_tokenIds);
+    bytes memory __rawMsg = abi.encodePacked(Strings.toHexString(uint256(uint160(_to)), 20),Strings.toHexString(uint256(uint160(_referrer)), 20),__implodedIds,_cost.toString());
+    Signature.check(__rawMsg, _msgHash, _signature, _signatureWallet);
+ 
+    /*Chequeo de los fondos con los que se hace el minteo */
+    if(msg.value==0 && getKickStartBalance(_msgSender()) >= _cost) {
+      updateKickStartBalance(_cost,_tokenIds.length);
     }
-
-    if(_tokenIds.length >0) {
-      __cost= costSelected;
-      _toMint=_tokenIds.length;
-    }
-    __cost=__cost * _toMint;
-    require(_toMint <= maxMinting,string(abi.encodePacked("Please mint no more that ",maxMinting.toString()," per call")));
-    if(msg.value==0 && getKickStartBalance(_msgSender()) >= __cost) {
-      updateKickStartBalance(__cost,_toMint);
-    }
-    else if(msg.value==0 && getAgreementBalance(_msgSender())>=__cost) {
-      updateAgreementBalance(__cost,_toMint);
+    else if(msg.value==0 && getAgreementBalance(_msgSender())>=_cost) {
+      updateAgreementBalance(_cost,_tokenIds.length);
       __agreement=true;
     }
     else {
-      require(msg.value == __cost,string(abi.encodePacked("To do this mint you must send ", __cost.toString())));
+      require(msg.value == _cost,string(abi.encodePacked("Must send ", _cost.toString())));
     }
-    _registerTotal(msg.value);
-    if(_tokenIds.length==0) {      
-      for(uint256 i=0; i<_toMint; i++) {
-        __tokenId=_getRandomTokenId(__tokenId);
-        if(__agreement) {
-          updateTokensMinted(__tokenId);
-        }
-        _safeMint(_to,__tokenId);
+
+    if(msg.value >0) {
+      _registerTotal(msg.value);
+      if(_referrer != address(0)){
+        _referrerPay(_referrer,msg.value);
       }
+    }
+    _mint(_to,_tokenIds.length,__agreement, _tokenIds,false);
+
+  }
+
+  /* @dev: It randomly mints up to n tokens specified in amount using the tokens specified in tokenIds as a base.   
+   * The msgHash is the hash of the message obtained by concatenating _to, implode _tokenIds, _amount, _cost, 
+   * _uniqid and _expiration _signature is the signature of the msgHash signed with the private key of _signatureWallet.
+   * @params:
+   * _to: Beneficiary address
+   * _referrer: address of the referrer or address(0)
+   * _amount: quantity of nft to be minted
+   * _tokenIds: randomly generated ids. One or more of them will also be chosen at random.
+   * _cost: the total cost of the claim. 
+   * _uniqid: a unique identifier that prevents the randomly generated list from being used more than once.
+   * _expiration: timestamp after which the signature that validates the parameters of the function call expires and prevents manipulation of the random choice.
+   * _msgHash: obtained from concatenating _to, _referrer, _amount, _cost, _uniqid and _expiration
+   * _signature: signature of the transaction
+   * The execution is interrupted if: contract is paused; random tokenlist is invalid; _amount > maxMinting; maxSupply reached; 
+   * cost == 0 (only possible when claim is from Belter's Day winner) but beltersDayMax was previously reached
+   * cost == 0 (only possible when claim is from Belter's Day winner) but _amount greather than 1;
+   * if it is not minting by strategic agreement but the maxToSale limit was reached;
+   * if msg.value >0 but is not equal to _cost
+   * if Signature already used, or expired.
+   * If something was wrong and the randomly choosen token was already minted
+   * 
+   */
+  function random(address _to, address _referrer, uint256 _amount, uint256[] memory _tokenIds, uint256 _cost, string memory _uniqid, uint32 _expiration, bytes32 _msgHash, bytes memory _signature) external payable {
+    uint256 __supply = totalSupply();
+    bool __agreement=false;
+    uint256 __realMaxToSale = maxToSale - (beltersDayMax-beltersDayMinted); //Belter's Day raffles must be reserved
+
+    require(!paused, "Minting paused");
+    require(_tokenIds.length >99, "Invalid tokenlist");
+    require(_amount >0 && _amount <= maxMinting,string(abi.encodePacked("Max mint ",maxMinting.toString()," per call")));
+    require(__supply + _amount < maxSupply, "No NFT left to mint");
+
+    if(beltersDayMax-beltersDayMinted==0) {
+      require(_cost >0, "Belters Day total reached");
+    }
+
+    if(_cost==0) {
+      //Only Belter's Day winner can mint for free but only one. 
+      require(_amount==1,"Only one to mint if it for free");
+      beltersDayMinted=beltersDayMinted+1;
+    }
+
+    if((_cost >0 && getAgreementBalance(_msgSender()) < _cost) || msg.value > 0 ) {
+      require((__supply + _amount - agreementMinted) < __realMaxToSale, "Currently no NFT left to mint");
+    }
+    require(msg.value==0 || msg.value==_cost, string(abi.encodePacked("Transfer ",_cost.toString())));
+
+    /* Signature Checking */
+    require(_usedUniqids[_uniqid]==false, "Signature already used");
+    require(_expiration > block.timestamp, "Signature expired");
+    string memory __implodedIds=_implodeIds(_tokenIds);
+    bytes memory __rawMsg = abi.encodePacked(Strings.toHexString(uint256(uint160(_to)), 20),Strings.toHexString(uint256(uint160(_referrer)), 20),__implodedIds,_amount.toString(), _cost.toString(),_uniqid,Strings.toString(_expiration));
+    Signature.check(__rawMsg, _msgHash, _signature, _signatureWallet);
+    _usedUniqids[_uniqid]=true;
+
+    /* kickstartBalance or agreementBalance or msg.value source */
+    if(msg.value==0 && getKickStartBalance(_msgSender()) >= _cost) {
+      updateKickStartBalance(_cost,_amount);
+    }
+    else if(msg.value==0 && getAgreementBalance(_msgSender())>=_cost) {
+      updateAgreementBalance(_cost,_amount);
+      __agreement=true;
     }
     else {
-      for(uint256 i=0; i<_tokenIds.length; i++) {
-        __tokenId=_tokenIds[i];      
-        require(!_exists(__tokenId), "Token already minted ");
-        if(__agreement) {
-          updateTokensMinted(__tokenId);
-        }
-      _safeMint(_to,__tokenId);      
-      }
-    }   
+      require(msg.value == _cost,string(abi.encodePacked("To do this mint you must send ", _cost.toString())));
+    }
+  
+    if(msg.value >0) {
+      _registerTotal(msg.value);
+      if(_referrer != address(0)){
+        _referrerPay(_referrer,msg.value);
+      }      
+    }
+    
+    _mint(_to,_amount,__agreement, _tokenIds,true);
   }
 
-    /* @dev: Claim a BeltersDay free token to mint.
-    * Los NFT pueden ser reclamados a partir de las 00:00 GMT del dia beltersday, hasta la cantidad máxima especificada para ese
-    * año al momento de publicar el contrato. Cuando se agota la cantidad debe esperarse hasta el año próximo.
-    * Solo un NFT puede ser minteado con esta función por cada dirección.
-    */
-    function claim() public {
-      require(!paused, "Minting paused. Try again later");
-      uint256 currentBeltersDay;
-
-      for(uint8 i; i<beltersDay.length;i++) {
-        if(beltersDay[i] <=block.timestamp) {
-          if(beltersDayAssigned[beltersDay[i]]>0) {
-            currentBeltersDay=beltersDay[i];
-            break;
-          }
-        }
-        else {
-          break;
-        }
-      }      
-      require(currentBeltersDay >0,"Claim cannot be processed right now. Wait for the next Belters Day");
-      require(!belters[_msgSender()], "Only one NFT could be claimed thru belters day free claim");
-      uint256 tokenId=_getRandomTokenId(0);
-      beltersDayAssigned[currentBeltersDay]--;
-      belters[_msgSender()]=true;
-      _safeMint(_msgSender(),tokenId);
-    }
-
-    /* Developed using Hashlips (https://github.com/HashLips) and another sources as examples. */
-    function walletOfOwner(address _owner) public view returns (uint256[] memory) {
-      uint256 ownerTokenCount = balanceOf(_owner);
-      uint256[] memory tokenIds = new uint256[](ownerTokenCount);
-      for (uint256 i; i < ownerTokenCount; i++) {
-        tokenIds[i] = tokenOfOwnerByIndex(_owner, i);
-      }
-      return tokenIds;
-    }
-
-    /* @dev: Devuelve la URI del token. Si el asteroide fue renombrado por el Asteroid Naming Service
-     * entonces la URI devuelta sera la correspondiente al manifiesto modificado, aunque podrá
-     * accederse al manifiesto anterior.
-     * Developed using Hashlips (https://github.com/HashLips) and another sources as examples. 
-     */
-    function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
-      require( _exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
-      string memory currentBaseURI = _baseURI();
-      if(bytes(_ansModifiedURI[tokenId]).length >0) {
-        return _ansModifiedURI[tokenId];
+  /* @dev: internal function called to mint direct or random */
+  function _mint(address _to, uint256 _amount, bool _agreement, uint256[] memory _tokenIds, bool _random) private {
+    uint256 __tokenId=0;
+    for(uint256 i=0; i<_amount; i++) {
+      if(_random){
+      __tokenId=_getRandomTokenFromList(__tokenId, _tokenIds);
       }
       else {
-        return bytes(currentBaseURI).length > 0
-          ? string(abi.encodePacked(currentBaseURI, tokenId.toString(), baseExtension))
-          : "";
+        __tokenId=_tokenIds[i];
+        require(!_exists(__tokenId), "Token already minted ");      
       }
-    }
-
-    /* @dev: Chequea si el NFT id tiene derechos totales en la DAO.
-     * Solo los NFT minteados con las funciones mint y claim tendran derechos totales en la DAO del Club.
-     * Los emitidos en virtud de acuerdos, tendran derechos restringidos, de acuerdo a lo establecido en el
-     * WhitePaper
-     */
-    function hasDaoRights(uint256 tokenId) public view returns(bool) {
-      require(_exists(tokenId), "Token not minted");
-      if(agreementTokens[tokenId] != address(0)) {
-        return(false);
+      if(_agreement) {
+        updateTokensMinted(__tokenId);
       }
-      else {
-        return(true);
-      }
+      _safeMint(_to,__tokenId);     
     }
+  }
 
-    /* @dev: Si los tokens emitidos por un acuerdo pueden obtener derechos totales, esta funcion la que
-     * los otorga si el pago recibido es el estipulado en el acuerdo.
-     */
-    function giveMeDaoRights(uint256 _tokenId) public payable {        
-        require(_exists(_tokenId), "Token not minted");
-        require(agreementTokens[_tokenId] != address(0), "Token have full rights");
-        agreement memory _agreement=getAgreement(agreementTokens[_tokenId]);
-        require(_agreement.befull>0, "Agreement don't allow improve token rights");
-        require(msg.value==_agreement.befull,string(abi.encodePacked("You must send ", _agreement.befull.toString()," to get full rights")));
-        delete agreementTokens[_tokenId];
-        emit RightsUpgraded(_tokenId);
+ 
+  /* Developed using Hashlips (https://github.com/HashLips) and another sources as examples. */
+  function walletOfOwner(address _owner) public view returns (uint256[] memory) {
+    uint256 ownerTokenCount = balanceOf(_owner);
+    uint256[] memory tokenIds = new uint256[](ownerTokenCount);
+    for (uint256 i; i < ownerTokenCount; i++) {
+      tokenIds[i] = tokenOfOwnerByIndex(_owner, i);
     }
+    return tokenIds;
+  }
 
-
-  /* @dev: Transfiere fondos hacia el Payment Splitter
-   * La funcion permanece publica para que cualquiera pueda iniciar las transferencias, lo que evita que los fondos permanezcan 
-   * rehenes en el contrato, en caso de existir discrepancias entre los beneficiarios finales de los fondos.
-   * En virtud que PaymentSplitter es invariable luego del lanzamiento del contrato, y que los fondos no pueden ser enviados a ninguna
-   * otra dirección, es seguro que la funcion quede publica.
+  /* @dev: Returns the URI of the token. If the asteroid was renamed by the Asteroid Naming Service 
+   * then the URI returned will be the one corresponding to the modified manifest.
+   * Developed using Hashlips (https://github.com/HashLips) and another sources as examples. 
    */
-    function withdraw() public {
-      address payable __to=payable(abcPayment);      
-      uint256 __available=address(this).balance;
-      require(__available >0,"Insuficient funds");
-      __to.transfer(__available);
-      emit Withdrawn(_msgSender(),__available);
+  function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {
+    require( _exists(tokenId), "ERC721Metadata: URI query for nonexistent token");
+    string memory currentBaseURI = _baseURI();
+    if(bytes(_ansModifiedURI[tokenId]).length >0) {
+      return _ansModifiedURI[tokenId];
     }
+    else {
+      return bytes(currentBaseURI).length > 0
+        ? string(abi.encodePacked(currentBaseURI, tokenId.toString(), baseExtension))
+        : "";
+    }
+  }
 
-    /* @dev: Sobreescribe la URI del token para que refleje los cambios efectuados desde el Asteroid Naming Service (ANS)
-     * Hasta que el servicio este disponible esta funcion no podra ser utilizada.
-     * La funcion no podra ser utilizada mas de una vez por token. ANS no llamara a esta funcion si el asteroide fue nombrado
-     * por la IAU.
-     */
-    function ansSetNewURI(uint256 _tokenId, address _owner, string memory _newURI) public {
-        require(ownerOf(_tokenId)==_owner, "Not the owner");
-        require(_msgSender() == _ansAddress, "Only Asteroid Naming Services can call that function");
-        require(_exists(_tokenId), "Token not yet minted");
-        require(bytes(_newURI).length >0, "Please set a new URI");
-        require(bytes(_ansModifiedURI[_tokenId]).length==0, "Token already named");
-        _ansModifiedURI[_tokenId]=_newURI;
-        emit URIChanged(_tokenId, _newURI);
+  /* @dev: Checks if the NFT _tokenId has full rights in the DAO. */
+  function hasDaoRights(uint256 tokenId) public view returns(bool) {
+    require(_exists(tokenId), "Token not minted");
+    if(agreementTokens[tokenId] != address(0)) {
+      return(false);
     }
+    else {
+      return(true);
+    }
+  }
 
-    /* @dev: Permite establecer nuevos precios para el minteo random y por ID. 
-     * La funcion esta restringida al owner del contrato. 
-     * Se establece el requisito de que el nuevo precio deba ser mayor al actual, como forma de proteger
-     * los intereses de los titulares de ejemplares ya minteados, los que tienen la garantia de que otros no podran 
-     * acceder a condiciones mejores a las que el tuvo.
-     */
-    function setCosts(uint256 _newSelected, uint256 _newRandom) public onlyOwner {
-      require(_newSelected > costSelected, "New cost must be greather than current");
-      require(_newRandom > costRandom, "New cost must be greather than current");
-      uint256 __oldSelected=costSelected;
-      uint256 __oldRandom=costRandom;
-      costSelected = _newSelected;
-      costRandom = _newRandom;
-      emit NewCosts(__oldSelected, __oldRandom, costSelected, costRandom);
-    }
+  /* @dev: If it possible by agreement, and msg.value equals to agreement.befull _tokenId convert owner to a full member of the CLUB */
+
+  function giveMeDaoRights(uint256 _tokenId) public payable {        
+    require(_exists(_tokenId), "Token not minted");
+    require(agreementTokens[_tokenId] != address(0), "Token already have full rights");
+    agreement memory _agreement=getAgreement(agreementTokens[_tokenId]);
+    require(_agreement.befull>0, "Agreement don't allow improve token rights");
+    require(msg.value==_agreement.befull,string(abi.encodePacked("You must send ", _agreement.befull.toString()," to get full rights")));
+    delete agreementTokens[_tokenId];
+    emit RightsUpgraded(_tokenId);
+  }
 
 
-    /* @dev: Permite reconfigurar la uri base del contrato. Las modificaciones al directorio IPFS donde se alojan los
-     * manifiestos requiere el llamado a esta funcion. Todas las URI anteriores seguiran vigentes para los manifiestos 
-     * previamente consultados. La funcion es requerida para actualizar la cantidad de asteroides reconocidos y el minteo
-     * de sus NFT.
-     */
-    function setBaseURI(string memory _newBaseURI) public onlyOwner {      
-      baseURI = _newBaseURI;
-    }
+  /* @dev: Transfer funds to the Payment Splitter
+   * The function remains public for anyone to initiate transfers, which prevents funds 
+   * from being held hostage in the contract, in case of discrepancies between the final 
+   * beneficiaries of the funds. The function remains public so that anyone can initiate transfers, 
+   * which prevents funds from being held hostage in the contract, in case of discrepancies between 
+   * the final beneficiaries of the funds.
+   *
+   * Since PaymentSplitter is invariant after the contract is launched, and the funds cannot be sent 
+   * to any other address, it is safe for the function to remain public.
+   *
+   * Subtract from the transferable balance the outstanding amounts to be paid to the referrers.
+   * 
+   */
+  function withdraw() public {
+    address payable __to=payable(abcPayment);      
+    uint256 __available=(address(this).balance-_referrersPending());
+    require(__available >0,"Insuficient funds");
+    __to.transfer(__available);
+    emit Withdrawn(_msgSender(),__available);
+  }
 
-    /* @dev: Pausa/restituye las funciones mint, claim y kickstart
-     */
-    function pause(bool _state) public onlyOwner {
-      paused = _state;
-      emit StateChanged(_state);
-    }
+  /* @dev: Returns the referral balance of the queried _referrer address */
+  function referrerBalance(address _referrer) public view returns(uint256){
+    return _referrerBalance[_referrer];
+  }
 
-    /* @dev: Actualiza maxSupply.
-     * maxSupply representa el numero mas alto de asteroide numerado por la IAU. Periodicamente ABC Starter actualizara la 
-     * cantidad maxima, y generara los archivos disponibles para que puedan ser minteados. En caso que la cantidad maxima para
-     * ser ofrecidos al mercado haya sido alcanzada, solo podran ser minteados mediante acuerdos estrategicos.
-     */
-    function setMaxSupply(uint256 _newMaxSupply) public onlyOwner {
-      require(_newMaxSupply > maxSupply, "New max supply must be greather than current");
-      uint256 __oldMaxSupply=maxSupply;
-      maxSupply=_newMaxSupply;
-      emit NewMaxSupply(__oldMaxSupply, maxSupply);
-    }
+  /* If the msgSender has a balance, 
+   * calling the function initiates the withdrawal to your wallet of the available balance generated with the referral program.
+   */
+  function referrerWidthraw() public {
+    uint256 __available=_referrerBalance[_msgSender()];
+    require(__available >0, "Insuficient funds");
+    _referrerBalance[_msgSender()]=0;
+    referrersWidthrawn=referrersWidthrawn+__available;
+    payable(_msgSender()).transfer(__available);
+    emit ReferrerWidthraw(_msgSender(),__available);
+  }
+
+  /* @dev: Overwrite the token URI to reflect changes made from the Asteroid Naming Service (ANS). 
+   * Until the service is available this function cannot be used. The function cannot be used more 
+   * than once per token. ANS will not call this function if the asteroid was named by the IAU.
+   */
+  function ansSetNewURI(uint256 _tokenId, address _owner, string memory _newURI) public {
+    require(ownerOf(_tokenId)==_owner, "Not the owner");
+    require(_msgSender() == _ansAddress, "Only Asteroid Naming Services can call that function");
+    require(_exists(_tokenId), "Token not yet minted");
+    require(bytes(_newURI).length >0, "Please set a new URI");
+    require(bytes(_ansModifiedURI[_tokenId]).length==0, "Token already named");
+    _ansModifiedURI[_tokenId]=_newURI;
+    emit URIChanged(_tokenId, _newURI);
+  }
+
+
+
+
+
+  /* @dev: Set the base URI   */
+  function setBaseURI(string memory _newBaseURI) public onlyOwner {      
+    baseURI = _newBaseURI;
+  }
+
+  /* @dev: Pause and restart minting functions */
+  function pause(bool _state) public onlyOwner {
+    paused = _state;
+    _kickStartPause(paused);
+    emit StateChanged(_state);
+  }
+
+  /* @dev: Update maxSupply.
+   * maxSupply represents the highest number of asteroids numbered by the IAU. Periodically ABC Starter 
+   * will update the maxSupply, and generate the files available to be claimed. In case the maximum amount 
+   * to be offered to the market has been reached, they can only be claimed through strategic agreements.
+   */
+  function setMaxSupply(uint256 _newMaxSupply) public onlyOwner {
+    require(_newMaxSupply > maxSupply, "New max supply must be greather than current");
+    uint256 __oldMaxSupply=maxSupply;
+    maxSupply=_newMaxSupply;
+    emit NewMaxSupply(__oldMaxSupply, maxSupply);
+  }
  
 
-    /* @dev: Transfiere la propiedad de la boveda del ABC. El objeto de la funcion es que sea ejecutada por ABC Starter
-     * una vez que el smart contract de la DAO sea puesto en funcionamiento y tenga los mecanismos para gestionar la disposicion
-     * de los fondos almacenados.
-     */
-    function transferABCVaultOwnership(address _newOwner) public onlyOwner {
-      ABCVault _vault = ABCVault(abcVault);
-      _vault.transferOwnership(_newOwner);
-      emit VaultOwnerShipTransfered(_newOwner);
+  /* @dev: Transfers the property of the ABC vault. The purpose of the function is to be executed 
+   * by ABC Igniter once the DAO smart contract is operational and has the mechanisms to manage the 
+   * disposition of the stored funds.*/
+  function transferABCVaultOwnership(address _newOwner) public onlyOwner {
+    ABCVault __vault = ABCVault(abcVault);
+    __vault.transferOwnership(_newOwner);
+    emit VaultOwnerShipTransfered(_newOwner);
+  }
+
+  /* @dev: Allows to configure the address that signs the messages in mint, random and kickstart.*/
+  function setSignatureWallet(address _newWallet) public onlyOwner {
+    require(_newWallet != address(0), "Set Valid Address");
+    _signatureWallet=_newWallet;
+    _kickSignature(_newWallet);
+  }
+
+  /* @dev: To be used to configure the ANS wallet address. */
+  function setAnsAddress(address _newAddress) public onlyOwner {
+    _ansAddress=_newAddress;
+  }
+
+  // internal
+  function _baseURI() internal view virtual override returns (string memory) {
+    return baseURI;
+  }
+
+  /* @dev: Calculates the total amount due to referrers */
+  function _referrersPending() private view returns (uint256) {
+    return referrersPaid-referrersWidthrawn;
+  }
+
+
+  /* @dev: Register a new fund entry by mint, random or kickstarter */
+  function _registerTotal(uint256 amount) internal override {
+    totalSales=totalSales+amount;
+    emit PaymentReceived(_msgSender(), amount);
+  }
+
+  /* @dev: Adds the commission generated by the referral program to the referrer's account*/
+  function _referrerPay(address _referrer, uint256 _amount) internal override {
+    referrersPaid=referrersPaid+((_amount*referrerFee)/referrerFeeDenominator);
+    _referrerBalance[_referrer]=_referrerBalance[_referrer]+((_amount*referrerFee)/referrerFeeDenominator);
+    emit ReferrerPaid(_referrer, ((_amount*referrerFee)/referrerFeeDenominator));
+  }
+
+
+  /* @dev: generate CERES token and transfer it to vault. Mint ownerInitialMinting NFTs and transfer it to Igniter */
+  function _initialMint() private {
+    uint256 __tokenId=0;
+    _safeMint(abcVault,1);
+    for(uint16 i=0; i<ownerInitialMinting; i++){
+      __tokenId=_getRandomTokenId(__tokenId);
+      _safeMint(_msgSender(),__tokenId);     
+    }      
+  }
+
+  /* @dev: return array elements imploded in a string */
+  function _implodeIds(uint256[] memory _ids) private pure returns (string memory) {
+    bytes memory output;
+
+    for (uint256 i = 0; i < _ids.length; i++) {
+      output = abi.encodePacked(output, Strings.toString(_ids[i]));
     }
+    return string(output);      
+  }
 
-    /* @dev: Una vez que el contrato de Asteroid Naming Services quede activo se configurara su direccion para que
-     * pueda setear el nombre
-     */
-    function setAnsAddress(address _newAddress) public onlyOwner {
-      _ansAddress=_newAddress;
+  /* @dev: get a randomly chosen token Id from list. Used in random mint mint */
+  function _getRandomTokenFromList(uint256 _seed, uint256[] memory _ids) private view returns (uint256) {
+    uint256 __tokenId=_ids[Random.generate(0,_ids.length -1,_seed)];
+    uint16 __iterations=0;
+    while(_exists(__tokenId)) {
+      __tokenId=_ids[Random.generate(0,_ids.length -1,__tokenId)];
+      __iterations++;
+      require(__iterations < 10, "An error occurs. Please retry");         
     }
+    return(__tokenId);
 
-    // internal
-    function _baseURI() internal view virtual override returns (string memory) {
-      return baseURI;
-    }
-
-    /* @dev: Incrementa totalSales con amount. Implementa el hook de kickstarter.
-    */
-    function _registerTotal(uint256 amount) internal override {
-      totalSales=totalSales+amount;
-    }
-
-    function _getRandomTokenId(uint256 _seed) private view returns (uint256) {
-      uint256 tokenId=Random.generate(2,maxToSale,_seed);
-      uint16 iterations=0;
-      while(_exists(tokenId)) {
-        tokenId=Random.generate(2,maxToSale,tokenId);
-        iterations++;
-        require(iterations < 200, "Please retry");
-      } 
-      return tokenId;
-    }
-
-
-    /* @dev: Create Belters Day information
-    * Set the dates for the next 20 Belters Days and assign the number of NFTs that will be minted for free, according to the white paper.
-    * Belters Day July 7th.
-    */
-
-  function _assignBeltersDay() private {
-    beltersDay.push(1656633600); // year: 2022
-    beltersDay.push(1688169600); // year: 2023
-    beltersDay.push(1719792000); // year: 2024
-    beltersDay.push(1751328000); // year: 2025
-    beltersDay.push(1782864000); // year: 2026
-    beltersDay.push(1814400000); // year: 2027
-    beltersDay.push(1846022400); // year: 2028
-    beltersDay.push(1877558400); // year: 2029
-    beltersDay.push(1909094400); // year: 2030
-    beltersDay.push(1940630400); // year: 2031
-    beltersDay.push(1972252800); // year: 2032
-    beltersDay.push(2003788800); // year: 2033
-    beltersDay.push(2035324800); // year: 2034
-    beltersDay.push(2066860800); // year: 2035
-    beltersDay.push(2098483200); // year: 2036
-    beltersDay.push(2130019200); // year: 2037
-    beltersDay.push(2161555200); // year: 2038
-    beltersDay.push(2193091200); // year: 2039
-    beltersDay.push(2224713600); // year: 2040
-    beltersDay.push(2256249600); // year: 2041
-    beltersDayAssigned[1656633600]=4100;
-    beltersDayAssigned[1688169600]=2100;
-    beltersDayAssigned[1719792000]=1100;
-    beltersDayAssigned[1751328000]=600;
-    beltersDayAssigned[1782864000]=350;
-    beltersDayAssigned[1814400000]=225;
-    beltersDayAssigned[1846022400]=162;
-    beltersDayAssigned[1877558400]=131;
-    beltersDayAssigned[1909094400]=115;
-    beltersDayAssigned[1940630400]=107;
-    beltersDayAssigned[1972252800]=103;
-    beltersDayAssigned[2003788800]=101;
-    beltersDayAssigned[2035324800]=101;
-    beltersDayAssigned[2066860800]=101;
-    beltersDayAssigned[2098483200]=101;
-    beltersDayAssigned[2130019200]=101;
-    beltersDayAssigned[2161555200]=101;
-    beltersDayAssigned[2193091200]=101;
-    beltersDayAssigned[2224713600]=100;
-    beltersDayAssigned[2256249600]=100;
+  }
+  /* @dev: get a randomly chosen token Id from total. Used in initial mint */
+  function _getRandomTokenId(uint256 _seed) private view returns (uint256) {
+    uint256 __tokenId=Random.generate(2,maxToSale,_seed);
+    uint16 __iterations=0;
+    while(_exists(__tokenId)) {
+      __tokenId=Random.generate(2,maxToSale,__tokenId);
+      __iterations++;
+      require(__iterations < 10, "An error occurs. Please retry");
+    } 
+    return __tokenId;
   }
 }
+
 /*
  * @title: Asteroid Belt Club Vault Smart Contract
  * @author: Gustavo Hernandez Baratta  (The Pan de Azucar Bay Company LLC)
- * @dev: Tiene por objeto acumular los ingresos derivados del registro de reclamos de propiedad sobre los asteroides
- * y sus posteriores transferencias, asi como cualquier otro ingreso que en el futuro se obtenga y que pase a formar 
- * parte de los activos que el Club acumulara para perseguir los objetivos comunitarios.
- * 
- * Aunque inicialmente la propiedad del contrato estará en manos del contrato ABC, esta previsto que se transfiera a la DAO
- * una vez que se hayan implementado las funciones que permitan gestionar esta boveda en forma autonoma. Para ello, la funcion 
- * transferABCVaultOwnership ha sido implementada para ser ejecutada por el ABC Starter (el owner del contrato original) y desarrollador
- * del proyecto.
+ * @dev: The vault is the smart contract in which the CLUB's digital assets are stored.
+ * Funds stored in the vault can only be transferred to third parties through a three-step 
+ * mechanism implemented in the addPayment, approvePayment and pay functions. 
+ * addPayment allows scheduling a future payment, which must be approved by invoking the 
+ * approvePayment function. Finally the payment is released and the beneficiary can execute the pay function and receive the funds.
+ * Between steps there is a constraint of approximately 10 days (63000 blocks). 
+ * The vault and individual payments can be paused in case of emergency by invoking the functions pause and pausePayment.
  *
- * El contrato puede recibir fondos, pero solo puede transferirlos a terceros mediante un mecanismo de tres pasos, uno, en el que se registra
- * un pago pendiente de aprobacion (funcion addPayment), un segundo que aprueba el pago (funcion aprovePayment) y finalmente uno que lo 
- * ejecuta (funcion pay). addPayment solo puede ser ejecutado por onlyOwner, por lo que mientras no sea transferida la propiedad de la boveda
- * a una direccion capaz de ejecutarla, ningun pago podra ser iniciado. Adicionalmente, entre cada una de las instancias se establece un retardo
- * de 63600 bloques (aproximadamente 10 dias), establecido para alertar a la comunidad sobre una potencial transferencia indebida de fondos.
+ * The vault management rules are designed to prevent now or in the future practices known as "rug pulling". 
+ * Initially the owner of the vault is the ABC contract itself, and no function is programmed to initiate the payment process. 
+ * Once the DAO is designed, a smart contract will receive ownership and with it the ability to add new payments and pause 
+ * the vault and individual contracts. But the process of approving a new payment will require a second contract 
+ * to approve it (this function should be fulfilled by the voting contract from which the community approves and 
+ * authorizes it), and there will be a restriction period long enough to alert on any improper payments.
  *
- * Adicionalmente, la boveda recibira la propiedad del token correspondiente al reclamo de propiedad del asteroide 1 (A801 AA - Ceres), 
- * pero no tiene ninguna funcion que le permita transferirlo a un tercero.  
+ *@email: ghernandez@pandeazucarbay.com
  */
 contract ABCVault is IERC721Receiver, Ownable {
 
+  //payment structure
   struct payment {
-    string description;
-    address to;
-    uint256 amount;
-    bool aproved;
-    address activator;
-    uint256 validblock;
-    bool paid;     
+    string description; //a breaf description
+    address to; //beneficiary address
+    uint256 amount; //amount to be transfered after approval
+    bool approved; //true if payment was approved
+    address activator; //address from which the approvePayment function can be invoked to approve this payment.
+    uint256 validblock; //block from which the payment can be approved // block from which the payment can be done.
+    bool paused; //if paused, cannot be approved or paid
+    bool paid;  //true if already paid   
   }  
-  mapping(uint256=>payment) public paymentlist;
-  uint256 _paymentCounter;
-  uint256 public constant blocksDelay=63600;
+  mapping(uint256=>payment) public paymentlist; //payments are stored in a list 
+  uint256 public _paymentCounter; //payment index counter
+  uint256 public constant blocksDelay=63600; //delay restriction
+  bool public paused = true; //Vault can be paused
 
-  event PaymentReceived(address indexed from, uint256 amount, uint256 balance);
-  event PaymentAdded(address indexed sender, address indexed to, address indexed activator, uint256 amount, string description, uint256 id, uint256 delayedto);
-  event PaymentAproved(uint256 id, address aprover, uint256 currentBlock, uint256 delayed);
-  event Paid(uint256 id, address executor, uint256 currentBlock, uint256 balance );
-
+  /* Events fired by contract */
+  event PaymentReceived(address indexed from, uint256 amount);
+  event PaymentAdded(uint256 id);
+  event PaymentApproved(uint256 id);
+  event Paid(uint256 id);
+  event StateChanged(bool state);
+  event PaymentStateChanged(uint256 id, bool state);
 
   receive() external payable {
-    emit PaymentReceived(_msgSender(), msg.value, address(this).balance);
+    emit PaymentReceived(_msgSender(), msg.value);
   }
   
   function onERC721Received(address, address, uint256, bytes memory) public virtual override returns (bytes4) {
     return this.onERC721Received.selector;
   }
 
-  /* @dev: Permite agendar pago descripto en _description a _to, por un monto _amount, que deberan ser aprobados por _activator.
-   * Solo el owner del contrato puede agendar un pago (inicialmente el contrato ABC, el que no tiene capacidad de llamar esta funcion).
-   * El objetivo es que sea la DAO la que llame esta funcion y delegue a un contrato de votacion su aprobacion. 
-   * La funcion devuelve un id de pago, que será el que deba especificarse en las funciones aprovePayment y pay
+  /* @dev: Pause and resume addPayment, aprovePayments and pay function 
+   * Change paused variable with bool _state params
+   * Emit StateChanged event
    */
-  function addPayment(string memory _description, address _to, uint256 _amount, address _activator) public onlyOwner returns(uint256) {  
+  function pause(bool _state) public onlyOwner {
+    paused = _state;
+    emit StateChanged(_state);
+  }
+
+  /* @dev: Pause and resume individual payment 
+   * Change payment state. if it paused can neither be approved nor paid
+   * Execution is stopped if payment don't exist of if already paid
+   * Emit PaymentStateChanged event
+   */
+  function pausePayment(uint256 _id, bool _state) public onlyOwner {
+    require(paymentlist[_id].to != address(0),"Payment don't exist");
+    require(!paymentlist[_id].paid, "Payment already paid");
+    emit PaymentStateChanged(_id,_state);
+  }
+
+  /* @dev: Add a new Payment. Only Owner can add a new payment to the list
+   * @params:
+   * _description: a breaf description
+   * _to: beneficiary address
+   * _amount: amount to be paid to beneficiary if approved
+   * _activator: address from approvePayment could be called after _payment.validblock restriction
+   * Execution is stopped if Vault is in pause state (paused==true), if description or amount or beneficiary or activator are no valud
+   * or if called by other than de owner.
+   * Emit PaymentAdded event
+   */
+  function addPayment(string memory _description, address _to, uint256 _amount, address _activator) public onlyOwner returns(uint256) {
+    require(!paused,"Vault Paused");
     require(bytes(_description).length >0, "Please add a description");
     require(_amount >0,"Amount must be greather than 0");
     require(_to != address(0), "Please specify a destination address");
@@ -481,48 +587,53 @@ contract ABCVault is IERC721Receiver, Ownable {
     __payment.activator=_activator;
     __payment.validblock=block.number + blocksDelay;
     paymentlist[_paymentCounter]=__payment;
-    emit PaymentAdded(_msgSender(),_to,_activator,_amount,_description,_paymentCounter,__payment.validblock);
+    emit PaymentAdded(_paymentCounter);
     return _paymentCounter;
   }
 
-  /* @dev: Funcion que le permite a la direccion especificada en _activator de la funcion addPayment aprobar el pago
-   * El proposito es que el contrato inteligente donde se someta a votacion el pago ejecute esta función si la misma 
-   * resulto afirmativa. Aunque cualquiera puede ejecutar la funcion, solo desde activator no dara error.
+  /* @dev: Approve previously added payment. After approval (and payment.validblock restriction) beneficiary can be paid
+   * Execution is stopped if Vault or payment are in paused state, if payment does not exist, if already aproved, if function
+   * was called by otther than activator or if current block number is less than valid block restriction.
+   * Emit PaymentApproved event.
    */
-  function aprovePayment(uint256 _id) public {
+  function approvePayment(uint256 _id) public {
+    require(!paused,"Vault Paused");
     require(paymentlist[_id].to != address(0),"Payment don't exist");
-    require(paymentlist[_id].aproved==false,"Payment already aproved");    
+    require(!paymentlist[_id].paused, "Payment paused");
+    require(paymentlist[_id].approved==false,"Payment already aproved");    
     require(paymentlist[_id].activator==_msgSender(),"Yo cannot aprove this payment");
     require(paymentlist[_id].validblock < block.number,"Wait for a valid block to aprove payment");
     paymentlist[_id].validblock=block.number+blocksDelay;
-    paymentlist[_id].aproved=true;
-    emit PaymentAproved(_id,_msgSender(), block.number, paymentlist[_id].validblock);
+    paymentlist[_id].approved=true;
+    emit PaymentApproved(_id);
 
   }
 
-  /* @dev: Ejecuta el pago ingresado en addPayment y aprovado en aprovePayment.
-   * Adicionalmente al retardo de blocksDelay desde el momento de la aprobacion, se requiere que el balance de la boveda
-   * tenga fondos suficientes para la transferencia. La funcion puede ser ejecutada desde cualquier direccion, ya que los pagos
-   * deben haber sido previamente ingresados y aprobados, y no puede ser alterado el destino de los mismos.
+  /* @dev: Release pre-approved payment after validblock restriction
+   * Anyone can call this function, but payment.amount funds are only transfered to payment.to.
+   * Execution was stopped if Vault or payment are in paused state, payment does not exist, not yet approved, already paid 
+   * or validblock is greather than current block or current balance is less than payment amount
+   * Emit Paid event
    */
   function pay(uint256 _id) public {
+    require(!paused,"Vault Paused");
     require(paymentlist[_id].to != address(0),"Payment don't exist");
-    require(paymentlist[_id].aproved==true,"Payment not yet aproved");
+    require(!paymentlist[_id].paused, "Payment paused");
+    require(paymentlist[_id].approved==true,"Payment not yet aproved");
     require(paymentlist[_id].paid==false,"Payment already paid");    
     require(paymentlist[_id].validblock < block.number,"Wait for a valid block to send payment");
     require(paymentlist[_id].amount <= address(this).balance,"Not enough balance to process this payment");
     paymentlist[_id].paid=true;
     address payable __to=payable(paymentlist[_id].to);
     __to.transfer(paymentlist[_id].amount);
-    emit Paid(_id, _msgSender(), block.number, address(this).balance);
+    emit Paid(_id);
   }
 }
 
 
 /* @title: ABCPayments
- * @dev: Contrato que recibe todos los fondos y divide los ingresos entre las wallets indicadas en el constructor, de 
- * acuerdo a los porcentajes derivados de todos los shares indicados.
- * Implementa el contrato PaymentSplitter, de OpenZeppelin
+ * @dev: Divides the payments received by ABC to the vault and to Igniter, as defined 
+ * at the time the contract was issued. Implements:
  * https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/finance/PaymentSplitter.sol
  */
 
