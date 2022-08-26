@@ -103,7 +103,8 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
     return super.supportsInterface(interfaceId);
   }
 
-  /* @dev: Direct payments to the contract not covered by a specific function */
+  /* @dev: Direct payments to the contract not covered by a specific function 
+   * Emit a paymentReceived Event*/
   receive() external payable  {      
     emit PaymentReceived(_msgSender(), msg.value);
 
