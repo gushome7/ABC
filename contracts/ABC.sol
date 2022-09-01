@@ -48,7 +48,7 @@ contract ABC is ERC2981, ERC721Enumerable, Agreements, Kickstarter {
 
   uint256 public constant maxToSale = 550000; //Max membership
   uint256 public totalSales = 0; //Total incomes
-  uint256 public constant maxMinting=10; //Cantidad maxima de tokens a mintear en una llamada a mint()
+  uint256 public constant maxMinting=10; //Max token minting in one call to mint() or random() functions.
   bool public paused = false; //Emergency pause
 
   /* ABC Starter Minting Privileges passed to kickstarter*/
