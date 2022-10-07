@@ -51,16 +51,17 @@ abstract contract Agreements is Ownable {
 
     mapping(address => agreement) private _agreements; //map beneficiary address to agreement data
     mapping(uint256 => address) public agreementTokens; //register each token minted from agreement
-    address private _dao; //dao Address
     address[] private _idagreements; //array of beneficiary addresses
 
     uint256 public agreementMinted=0; //total of claims
     uint256 public agreementUsed=0; //total of balance used
+    //uint256 public constant agreementRestrictionLimit=10; //10% of total (maxSupply) && 10% of total sales
+    //uint256 public constant agreementRestrictionExpires=500000; //10% of sales restriction 
+    uint256 public minToBeFull=0.1 ether;
 
-    uint256 public constant blocksDelay=63600; //safety pause between instances
+    uint256 public constant blocksDelay=6; //safety pause between instances
 
     /* Events */
-    event NewDaoAddress(address oldDao, address newDao);
     event AgreementUsed(address agreement, uint256 amount, uint256 tokens);
     event AgreementAproved(uint256 id, uint256 sinceBlock);
     event NewAgreementProposed(uint256 id, string name, string description, uint256 credit, address activator, address beneficiary, uint256 blocksDelay);
@@ -68,39 +69,15 @@ abstract contract Agreements is Ownable {
 
 
     constructor() {
-        _dao=address(0);
         _idagreements.push(address(0)); //To get all real agreement ids over 0 index
-    }
-
-
-    /* @dev: Returns the address of the current autohorized to create agreements (THE DAO) */
-    function dao() public view returns (address) {
-        return _dao;
-    }
-
-    /* @dev: Throws if called by any account other than the dao. Disabled until dao() returns a valid address. 
-     * Adapted from Openzeppelin onlyOwner() 
-     */
-    modifier onlyDao() {
-        require(dao() != address(0), "DAO Address not configured");
-        require(dao() == _msgSender(), "Caller is not the Dao");
-        _;
-    }
-
-    /* @dev: Set New Dao Address. Only contract owner can set and change Dao Address*/
-    function setDaoAddress(address newDao) public onlyOwner {
-        require(newDao != address(0), "Please set a valid Dao address");
-        address oldDao = _dao;
-        _dao = newDao;
-        emit NewDaoAddress(oldDao, newDao);
     }
 
     /* @dev: Emergency pause/restore an active agreement. Only Owner can call it. 
      * Emit an AgreementPaused event with new state */
     
     function pauseAgreement(address _address, bool _state) public onlyOwner {
-        require(_agreements[_address].id > 0 ,"Agreement not found");
-        require(_agreements[_address].active==true, "Agreement not yet active");
+        require(_agreements[_address].id > 0 
+         && _agreements[_address].active==true ,"Agreement not found or not active");
         _agreements[_address].paused = _state;
         emit AgreementPaused(_address, _state);
     }
@@ -138,10 +115,11 @@ abstract contract Agreements is Ownable {
      */
 
     function updateAgreementBalance(uint256 _amount, uint256 _tokens) internal {
-        require(_agreements[_msgSender()].id >0, "Agreement not found");
-        require(_agreements[_msgSender()].paused==false,"Agreement paused");
-        require(_agreements[_msgSender()].active,"Agreement not yet active");
-        require(block.number > _agreements[_msgSender()].validblock, "Must wait for a valid block");
+        require(_agreements[_msgSender()].id >0 
+         && _agreements[_msgSender()].paused==false 
+         && _agreements[_msgSender()].active 
+         && block.number > _agreements[_msgSender()].validblock , "Agreement not found or not ready");
+
         require(_agreements[_msgSender()].credits-_agreements[_msgSender()].used >= _amount,"Not enough available credit");
         _agreements[_msgSender()].used=_agreements[_msgSender()].used+_amount;
         agreementUsed=agreementUsed+_amount;
@@ -161,7 +139,7 @@ abstract contract Agreements is Ownable {
      * credits: amount to be assigned
      * activator: address authorized to activate agreement
      * address: if active, from what address can mint using credit.
-     * befull: amount the NFT holder must pay to become a full member of the ABC. zero closes the possibility.
+     * befull: amount the NFT holder must pay to become a full member of the ABC. zero closes the possibility. must be at least minToBeFull
      * The agreement cannot be activated before the block set in ValidBlock.
      * This gives the community a time frame to react in case of a spuriously created agreement.
      * Execution is stopped if a previously defined agreement is found for that beneficiary
@@ -169,8 +147,9 @@ abstract contract Agreements is Ownable {
      * Returns a structure with the information of the newly created agreement
      */
 
-    function createAgreement(string memory _name, string memory _description, uint256 _credits, address _activator, address _address, uint256 _befull) public onlyDao returns(agreement memory) {
+    function createAgreement(string memory _name, string memory _description, uint256 _credits, address _activator, address _address, uint256 _befull) public onlyOwner returns(agreement memory) {
         require(_agreements[_address].id == 0 ,"Already exists an agreement owned by that address");
+        require(_befull==0 || _befull >=minToBeFull, "If want to grant DAO rights payment must be at least minToBeFull");
         agreement memory _agreement;
         _agreement.id=_idagreements.length;
         _agreement.name=_name;
@@ -208,5 +187,10 @@ abstract contract Agreements is Ownable {
 
         emit AgreementAproved(_id, _agreements[_agreement].validblock);
     }
+
+  function setMinToBeFull(uint256 _newValue) public onlyOwner {
+    require(_newValue > minToBeFull, "New value must be greather than current");
+    minToBeFull=_newValue;
+  }     
 
 }    

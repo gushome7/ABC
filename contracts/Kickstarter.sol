@@ -29,9 +29,8 @@
 
 pragma solidity ^0.8.14;
 
-import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/utils/Context.sol";
+//import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/utils/Context.sol";
 import "github.com/OpenZeppelin/openzeppelin-contracts/contracts/utils/Strings.sol";
-import "./utils/Signature.sol";
 
 abstract contract Kickstarter {
     using Strings for uint256;
@@ -47,9 +46,6 @@ abstract contract Kickstarter {
     uint256 public ownerMinted=0; //Token minted by owner using constructor credit;
     uint256 public ownerTransfered=0; //Amount transfered to others by owner
     address private _owner=address(0);
-    address private _signatureWallet=address(0);
-    bool private paused;
-
 
     /* @dev: Event fired when Kickstart Balance was transferred */
     event KickstartBalanceTransfered(address from, address to,  uint256 amount);
@@ -60,9 +56,13 @@ abstract contract Kickstarter {
       _owner=msg.sender;
     }
 
-    /* @dev: returns current reward multiplier and the remaining to reach current threshold */
+    /* @dev: returns current reward multiplier and the remaining to reach current threshold 
+     * After reaching 500 ether, return 1x multiplier and 1000 ether max deposit, to allow to use remaining balance
+     * if any */
     function kickStartThreshold() public view returns (uint256[] memory) {
         uint256[] memory boost = new uint256[](2);
+        boost[0]=1;
+        boost[1]=1000 ether;
         
         for(uint i=0;i<kickStartTargets.length;i++) {
             if(kickStartCollected < kickStartTargets[i]) {
@@ -109,15 +109,15 @@ abstract contract Kickstarter {
      */
     function kickstart(address _referer, uint32 _expiration, bytes32 _msgHash, bytes memory _signature) public payable {
         uint256[] memory boost= kickStartThreshold();
-        require(!paused, "Contract paused");
+        _checkPaused();
         require(boost[0] > 0, "KickStart ended. Thanks!");
         require(boost[1] >=msg.value, string(abi.encodePacked("Please send no more than ", boost[1].toString())));
         require(msg.value >= kickStartMin, string(abi.encodePacked("Must send at least ", kickStartMin.toString())));
         require(_expiration > block.timestamp, "Signature expired");
 
         bytes memory __rawMsg = abi.encodePacked(Strings.toHexString(uint256(uint160(_referer)), 20),Strings.toString(_expiration));
-        Signature.check(__rawMsg, _msgHash, _signature, _signatureWallet);
-
+        _checkSignature(__rawMsg, _msgHash, _signature);
+        
         kickStarters[msg.sender]=kickStarters[msg.sender]+(msg.value*boost[0]);
         kickStartCollected=kickStartCollected+msg.value;
         _registerTotal(msg.value);
@@ -146,16 +146,9 @@ abstract contract Kickstarter {
         emit KickstartBalanceTransfered(msg.sender, _to, _amount);
     }
 
-    /* @dev: called from main contract when owner change signature wallet */
-    function _kickSignature(address _newSignatureWallet) internal {
-        _signatureWallet=_newSignatureWallet;
-    }
-
-    function _kickStartPause(bool _status) internal {
-        paused=_status;
-    }
-
     function _registerTotal(uint256 value) internal virtual {}
     function _referrerPay(address referer, uint256 amount) internal virtual {}
+    function _checkPaused() internal virtual {}
+    function _checkSignature(bytes memory _raw, bytes32 _msgHash, bytes memory _signature) internal virtual {}
 
 }    
